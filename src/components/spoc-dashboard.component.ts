@@ -778,7 +778,6 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   async submitWalkIn() {
     if (!this.walkInForm.fullName || !this.walkInForm.email) return;
     this.isAddingWalkIn.set(true);
-    // Use the event's sheet URL
     const event = this.dataService.getEventById(this.eventId());
     if (event) {
       await this.dataService.addWalkInAttendee(
@@ -788,7 +787,8 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
           name: event.defaultSpocName || '',
           email: event.defaultSpocEmail || '',
           slack: event.defaultSpocSlack || ''
-        }
+        },
+        false // autoCheckIn: false — admin controls check-in manually via the toggle
       );
     }
     this.isAddingWalkIn.set(false);
