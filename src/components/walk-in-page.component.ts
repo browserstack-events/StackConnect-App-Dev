@@ -93,10 +93,37 @@ import { Router } from '@angular/router';
             </button>
           </form>
         } @else {
-          <div class="text-center py-8">
-            <div class="text-6xl mb-4">✅</div>
-            <h2 class="text-2xl font-bold text-green-600 mb-2">Successfully Registered!</h2>
-            <p class="text-gray-600 mb-6">You have been registered. Please collect your badge.</p>
+          <!-- Success + Badge Card -->
+          <div class="text-center py-4">
+            <div class="text-5xl mb-3">✅</div>
+            <h2 class="text-xl font-bold text-green-600 mb-1">Registration Successful!</h2>
+            <p class="text-sm text-gray-500 mb-5">
+              Show the card below at the <span class="font-semibold text-gray-700">Admin Desk</span> to collect your ID badge.
+            </p>
+
+            <!-- Badge Card -->
+            <div class="border-2 border-dashed border-purple-300 rounded-xl bg-purple-50 px-6 py-7 mb-5 text-left">
+              <p class="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-3 text-center">
+                🪪 Your Entry Pass
+              </p>
+              <p class="text-2xl font-extrabold text-gray-900 leading-snug break-words text-center">
+                {{ registeredAttendee()?.fullName }}
+              </p>
+              <p class="text-base font-semibold text-purple-700 mt-1 break-words text-center">
+                {{ registeredAttendee()?.company }}
+              </p>
+              <div class="mt-5 flex justify-center">
+                <span class="inline-flex items-center gap-2 bg-yellow-100 text-yellow-800 text-xs font-bold px-4 py-1.5 rounded-full border border-yellow-300">
+                  <span class="w-2.5 h-2.5 rounded-full bg-yellow-500 ring-1 ring-yellow-600/20"></span>
+                  Yellow Lanyard
+                </span>
+              </div>
+            </div>
+
+            <p class="text-xs text-gray-400 mb-6">
+              ℹ️ Your check-in has been recorded and a confirmation email is on its way.
+            </p>
+
             <button
               (click)="reset()"
               class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium transition"
@@ -125,6 +152,10 @@ export class WalkInPageComponent implements OnInit {
   errorMessage = signal('');
 
   eventName = signal('Event');
+
+  /** Stores the name + company of the successfully registered attendee for badge display. */
+  registeredAttendee = signal<{ fullName: string; company: string } | null>(null);
+
   private currentEvent: any = null;
 
   async ngOnInit() {
@@ -169,11 +200,11 @@ export class WalkInPageComponent implements OnInit {
 
     // 2. Corporate Email Validation
     const emailLower = emailInput.toLowerCase();
-    const isPersonalOrEdu = 
-      emailLower.includes('@gmail.') || 
-      emailLower.includes('@yahoo.') || 
-      emailLower.includes('@zoho.') || 
-      emailLower.includes('.edu') || 
+    const isPersonalOrEdu =
+      emailLower.includes('@gmail.') ||
+      emailLower.includes('@yahoo.') ||
+      emailLower.includes('@zoho.') ||
+      emailLower.includes('.edu') ||
       emailLower.endsWith('.edu');
 
     if (isPersonalOrEdu) {
@@ -183,14 +214,9 @@ export class WalkInPageComponent implements OnInit {
 
     // 3. Contact Number Validation (If provided)
     if (contactInput) {
-      // Must start with +, followed by 7-15 digits (allowing for spaces/dashes/parens)
-      // Strips non-digit chars to check length, but ensures it starts with +
       const hasCountryCode = contactInput.startsWith('+');
       const digitCount = contactInput.replace(/[^0-9]/g, '').length;
-      
-      // International standards usually 7 to 15 digits
       const isValidLength = digitCount >= 7 && digitCount <= 15;
-      // Allow +, space, -, (, ) and numbers
       const isValidChars = /^\+[0-9\s\-\(\).]+$/.test(contactInput);
 
       if (!hasCountryCode || !isValidLength || !isValidChars) {
@@ -206,11 +232,16 @@ export class WalkInPageComponent implements OnInit {
 
     this.submitting.set(true);
 
+    // Capture values before the async call; signal reads after await may
+    // return stale values if the form is reset mid-flight.
+    const capturedName = this.fullName().trim();
+    const capturedCompany = this.company().trim();
+
     const success = await this.dataService.addWalkInAttendee(
       {
-        fullName: this.fullName(),
+        fullName: capturedName,
         email: emailInput,
-        company: this.company(),
+        company: capturedCompany,
         contact: contactInput
       },
       this.currentEvent.sheetUrl,
@@ -218,11 +249,14 @@ export class WalkInPageComponent implements OnInit {
         name: this.currentEvent.defaultSpocName,
         email: this.currentEvent.defaultSpocEmail,
         slack: this.currentEvent.defaultSpocSlack
-      }
+      },
+      true // autoCheckIn: mark attendance + fire email notification immediately
     );
+
     this.submitting.set(false);
 
     if (success) {
+      this.registeredAttendee.set({ fullName: capturedName, company: capturedCompany });
       this.submitted.set(true);
     } else {
       this.errorMessage.set('Failed to register. Please check your connection and try again.');
@@ -236,5 +270,6 @@ export class WalkInPageComponent implements OnInit {
     this.contact.set('');
     this.errorMessage.set('');
     this.submitted.set(false);
+    this.registeredAttendee.set(null);
   }
 }
