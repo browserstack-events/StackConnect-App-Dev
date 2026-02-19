@@ -373,10 +373,21 @@ export class DataService {
     });
   }
 
+  /**
+   * Adds a walk-in attendee to the event sheet.
+   *
+   * @param data          - Attendee form fields.
+   * @param sheetUrlOverride  - Override the active sheet URL (used when called outside a loaded event).
+   * @param defaultSpocValues - SPOC assignment defaults from the event config.
+   * @param autoCheckIn   - When `true`, marks the attendee as checked-in immediately and instructs
+   *                        the backend to fire the confirmation email. Defaults to `false` so that
+   *                        admin-desk manual adds retain the existing toggle-driven flow.
+   */
   async addWalkInAttendee(
     data: { fullName: string; email: string; company: string; contact?: string },
     sheetUrlOverride?: string,
-    defaultSpocValues?: { name?: string; email?: string; slack?: string }  // ✅ NEW parameter
+    defaultSpocValues?: { name?: string; email?: string; slack?: string },
+    autoCheckIn: boolean = false
   ): Promise<boolean> {
     const sheet = sheetUrlOverride || this.currentSheetUrl();
     const sheetName = this.sheetName();
@@ -391,6 +402,10 @@ export class DataService {
     const firstName = nameParts[0] || '';
     const lastName = nameParts.slice(1).join(' ') || '';
 
+    // When autoCheckIn is true we stamp the check-in time optimistically in the
+    // local state so the dashboard reflects the check-in without needing a sync.
+    const checkInTime = autoCheckIn ? new Date() : null;
+
     const newAttendee: Attendee = {
       id: newId,
       fullName: data.fullName,
@@ -399,17 +414,17 @@ export class DataService {
       contact: data.contact || '',
       firstName: firstName,
       lastName: lastName,
-      attendance: false,
-      checkInTime: null,
+      attendance: autoCheckIn,
+      checkInTime: checkInTime,
       segment: 'Walk-in',
-      spocName: defaultSpocValues?.name || 'Walk-in',  // ✅ Use default SPOC
-      spocEmail: defaultSpocValues?.email || '',        // ✅ Use default SPOC
-      spocSlack: defaultSpocValues?.slack || '',        // ✅ Use default SPOC
+      spocName: defaultSpocValues?.name || 'Walk-in',
+      spocEmail: defaultSpocValues?.email || '',
+      spocSlack: defaultSpocValues?.slack || '',
       lanyardColor: 'Yellow',
       printStatus: '',
       leadIntel: '',
       notes: '',
-      attendeeType: 'Attendee' // Default for walk-ins
+      attendeeType: 'Attendee'
     };
 
     if (this.currentSheetUrl() === sheet) {
@@ -429,8 +444,13 @@ export class DataService {
         firstName,
         lastName,
         lanyardColor: 'Yellow',
-        attendance: false,
-        // ✅ Pass default SPOC values to backend
+        // Reflect the auto check-in state so the sheet row is written correctly.
+        attendance: autoCheckIn,
+        // ISO string keeps the GAS script timezone-agnostic; null when not checked in.
+        checkInTime: autoCheckIn ? checkInTime!.toISOString() : null,
+        // Signal to the GAS backend: send the confirmation email for this walk-in.
+        autoCheckIn: autoCheckIn,
+        // Pass default SPOC values to backend
         defaultSpocName: defaultSpocValues?.name || '',
         defaultSpocEmail: defaultSpocValues?.email || '',
         defaultSpocSlack: defaultSpocValues?.slack || '',
