@@ -553,11 +553,16 @@ export class DataService {
       // Case-insensitive field lookup across all candidate key names.
       // The backend now sends camelCase keys only; the fallback to raw header
       // names covers any older cached/legacy data that may still have both styles.
+      // Normalize a key for comparison: lowercase, strip spaces and hyphens.
+      // This bridges the gap between backend camelCase keys (e.g. 'colourOfTheLanyard',
+      // 'check-InTime') and the human-readable candidate strings used below
+      // (e.g. 'Colour of the Lanyard', 'Check-in Time').
+      const norm = (k: string) => k.toLowerCase().replace(/[\s-]/g, '');
       const get = (...candidates: string[]) => {
         for (const key of candidates) {
           if (row[key] !== undefined && row[key] !== null) return row[key];
-          const lowerKey = key.toLowerCase().trim();
-          const found = Object.keys(row).find(k => k.toLowerCase().trim() === lowerKey);
+          const nKey = norm(key);
+          const found = Object.keys(row).find(k => norm(k) === nKey);
           if (found && row[found] !== undefined && row[found] !== null) return row[found];
         }
         return undefined;
