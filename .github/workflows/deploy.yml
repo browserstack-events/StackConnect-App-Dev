@@ -31,8 +31,6 @@ jobs:
 
       - name: Build
         run: npm run build -- --base-href /Sales-SPOC-Dashboard/
-        env:
-          VITE_GAS_URL: ${{ secrets.VITE_GAS_URL }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

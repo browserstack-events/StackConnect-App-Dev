@@ -92,7 +92,7 @@ export class DataService {
    * if you redeploy the backend.
    */
   private readonly SCRIPT_URL =
-    'https://script.google.com/macros/s/AKfycbxCsdkPGi3-rxDTWAJIHfK6O70GaPSmJmlqLYTlX8jxFE7MqOS7koul0uSKTynDXKOa/exec';
+    'https://script.google.com/a/macros/browserstack.com/s/AKfycbyQRX7qS5cpjZmQCEAmDLy9SW5xKvdeK59IfQ8AnshFLbfaeFCppaTXlT3M3aRbRKJJ/exec';
 
   private currentSheetUrl = signal('');
 
