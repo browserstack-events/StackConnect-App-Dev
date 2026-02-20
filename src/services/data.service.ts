@@ -1,4 +1,6 @@
 import { Injectable, signal } from '@angular/core';
+import { STORAGE_KEYS, SYNC_CONFIG, VALIDATION, DEFAULT_LANYARD_COLOR } from '../constants';
+
 export type AttendeeType = 'Attendee' | 'Speaker' | 'Round Table';
 
 export interface Attendee {
@@ -36,47 +38,95 @@ export interface SavedEvent {
   defaultSpocSlack?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Shared walk-in validation (used by both the public form and admin modal)
+// ---------------------------------------------------------------------------
+
+export function validateWalkInData(data: {
+  fullName: string;
+  email: string;
+  company: string;
+  contact?: string;
+}): string | null {
+  if (!data.fullName?.trim()) return 'Full name is required';
+  if (!data.email?.trim())    return 'Email is required';
+  if (!data.company?.trim())  return 'Company is required';
+
+  if (!VALIDATION.EMAIL_REGEX.test(data.email)) {
+    return 'Please enter a valid email address';
+  }
+
+  const emailLower = data.email.toLowerCase();
+  const isPersonal = VALIDATION.PERSONAL_EMAIL_DOMAINS.some(d => emailLower.includes(d))
+                  || emailLower.endsWith(VALIDATION.BLOCKED_TLD);
+  if (isPersonal) {
+    return 'Please use your corporate email address. Personal accounts are not accepted.';
+  }
+
+  if (data.contact?.trim()) {
+    if (!VALIDATION.PHONE_REGEX.test(data.contact.trim())) {
+      return 'Please enter a valid international phone number starting with a country code (e.g. +1 ...).';
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// DataService
+// ---------------------------------------------------------------------------
+
 @Injectable({
   providedIn: 'root'
 })
 export class DataService {
-  private rawAttendees = signal<Attendee[]>([]);
-  public sheetName = signal('');
+  private rawAttendees   = signal<Attendee[]>([]);
+  public sheetName       = signal('');
   public availableSheets = signal<string[]>([]);
-  public savedEvents = signal<SavedEvent[]>([]);
+  public savedEvents     = signal<SavedEvent[]>([]);
 
-  private readonly HARDCODED_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxCsdkPGi3-rxDTWAJIHfK6O70GaPSmJmlqLYTlX8jxFE7MqOS7koul0uSKTynDXKOa/exec';
+  /**
+   * GAS endpoint URL — read from the VITE_GAS_URL environment variable at
+   * build time. Falls back to empty string so the app degrades gracefully
+   * rather than throwing at startup.
+   *
+   * To configure locally: create a .env file (see .env.example) with:
+   *   VITE_GAS_URL=https://script.google.com/macros/s/<deployment_id>/exec
+   *
+   * For GitHub Pages CI: add VITE_GAS_URL as a repository secret and inject
+   * it during the build step in .github/workflows/deploy.yml.
+   */
+  private readonly SCRIPT_URL: string =
+    (typeof (import.meta as any).env !== 'undefined'
+      ? (import.meta as any).env['VITE_GAS_URL']
+      : undefined)
+    ?? '';
+
   private currentSheetUrl = signal('');
+
+  /** Pending sync payloads that failed and will be retried on next loadFromBackend */
+  private pendingSyncs: Array<{ payload: any; retries: number }> = [];
+
+  /**
+   * Exposed to components so they can show a non-blocking warning banner
+   * when one or more writes haven't synced successfully.
+   */
+  public syncError = signal<string | null>(null);
 
   constructor() {
     this.loadEventsFromStorage();
   }
 
   // --- SAFE JSON PARSER ---
+
   private async safeJson(response: Response): Promise<any> {
     try {
       if (!response) return {};
-
       const text = await response.text();
-
-      // Ensure text is actually a string
-      if (text === undefined || text === null || typeof text !== 'string') {
-        return {};
-      }
-
+      if (!text || typeof text !== 'string') return {};
       const trimmed = text.trim();
-
-      // Guard against common non-JSON responses
-      // "undefined" string check is important for Google Apps Script empty returns
-      if (!trimmed || trimmed === 'undefined' || trimmed === 'null') {
-        return {};
-      }
-
-      // Pre-check for JSON structure to avoid SyntaxError on HTML or plain text
-      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-        return {};
-      }
-
+      if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return {};
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return {};
       return JSON.parse(trimmed);
     } catch (e) {
       console.warn('Failed to parse JSON response.', e);
@@ -88,29 +138,16 @@ export class DataService {
 
   private loadEventsFromStorage() {
     try {
-      // Safety check for SSR or environments without localStorage
       if (typeof localStorage === 'undefined') return;
-
-      const data = localStorage.getItem('stack_connect_events');
-
-      // Explicitly check for null/undefined value
-      if (data === null || data === undefined) return;
-
-      const cleanData = data.trim();
-
-      // Strict check: valid JSON for our purposes must be an array or object.
-      // This prevents 'undefined', 'null', or plain strings from being parsed.
-      if (!cleanData || (!cleanData.startsWith('[') && !cleanData.startsWith('{'))) {
-        return;
-      }
-
-      const parsed = JSON.parse(cleanData);
-      if (Array.isArray(parsed)) {
-        this.savedEvents.set(parsed);
-      }
+      const data = localStorage.getItem(STORAGE_KEYS.EVENTS);
+      if (!data) return;
+      const clean = data.trim();
+      if (!clean || (!clean.startsWith('[') && !clean.startsWith('{'))) return;
+      const parsed = JSON.parse(clean);
+      if (Array.isArray(parsed)) this.savedEvents.set(parsed);
     } catch (e) {
       console.error('Error loading events from storage, clearing corrupt data:', e);
-      try { localStorage.removeItem('stack_connect_events'); } catch { }
+      try { localStorage.removeItem(STORAGE_KEYS.EVENTS); } catch {}
     }
   }
 
@@ -122,7 +159,7 @@ export class DataService {
       createdAt: Date.now(),
       state: 'Active',
       eventDate: '',
-      defaultSpocName: '',
+      defaultSpocName:  '',
       defaultSpocEmail: '',
       defaultSpocSlack: ''
     };
@@ -131,57 +168,32 @@ export class DataService {
     return newEvent;
   }
 
-
-  // NEW: General update method for events (used for archiving and setting dates)
-  // updateEvent(id: string, updates: Partial<SavedEvent>) {
-  //   this.savedEvents.update(events => 
-  //     events.map(e => e.id === id ? { ...e, ...updates } : e)
-  //   );
-  //   this.persistEvents();
-  // }
-  // NEW: General update method for events (used for archiving and setting dates)
   async updateEvent(id: string, updates: Partial<SavedEvent>) {
-    // Update local state immediately
     this.savedEvents.update(events =>
       events.map(e => e.id === id ? { ...e, ...updates } : e)
     );
     this.persistEvents();
-
-    // Sync to backend Master Event Log
     await this.syncEventUpdateToBackend(id, updates);
   }
 
-  // NEW: Sync event updates to backend
   private async syncEventUpdateToBackend(eventId: string, updates: Partial<SavedEvent>) {
-    if (!this.HARDCODED_SCRIPT_URL) {
-      console.warn('Backend URL not configured, update is local only');
+    if (!this.SCRIPT_URL) {
+      console.warn('Backend URL not configured — event update is local only');
       return;
     }
-
     try {
-      const payload = {
-        action: 'update_event',
-        eventId: eventId,
-        ...updates
-      };
-
-      const response = await fetch(this.HARDCODED_SCRIPT_URL, {
+      const response = await fetch(this.SCRIPT_URL, {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ action: 'update_event', eventId, ...updates })
       });
-
       const result = await this.safeJson(response);
-
-      if (result.status === 'success') {
-        console.log('✅ Event update synced to backend:', eventId);
-      } else {
-        console.error('❌ Failed to sync event update:', result.error);
+      if (result.status !== 'success') {
+        console.error('Failed to sync event update:', result.error);
       }
     } catch (error) {
-      console.error('❌ Failed to sync event update to backend:', error);
+      console.error('Failed to sync event update to backend:', error);
     }
   }
-
 
   removeEvent(id: string) {
     this.savedEvents.update(prev => prev.filter(e => e.id !== id));
@@ -193,45 +205,32 @@ export class DataService {
   }
 
   private persistEvents() {
-    const events = this.savedEvents();
-    if (events) {
-      try {
-        localStorage.setItem('stack_connect_events', JSON.stringify(events));
-      } catch (e) {
-        console.error('Failed to save to localStorage', e);
-      }
+    try {
+      localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(this.savedEvents()));
+    } catch (e) {
+      console.error('Failed to save to localStorage', e);
     }
   }
 
   // --- MASTER LOG SYNC ---
 
   async fetchAllEventsFromMasterLog(): Promise<void> {
-    if (!this.HARDCODED_SCRIPT_URL) return;
-
+    if (!this.SCRIPT_URL) return;
     try {
-      const response = await fetch(`${this.HARDCODED_SCRIPT_URL}?action=get_all_events`);
+      const response = await fetch(`${this.SCRIPT_URL}?action=get_all_events`);
       const data = await this.safeJson(response);
-
       if (data.status === 'success' && Array.isArray(data.events)) {
-        const localMap = new Map(this.savedEvents().map(e => [e.id, e]));
-
-        const events: SavedEvent[] = data.events.map((e: any) => {
-          const local = localMap.get(e.eventId);
-          return {
-            id: e.eventId,
-            name: e.eventName,
-            sheetUrl: e.sheetUrl,
-            createdAt: e.createdAt ? new Date(e.createdAt).getTime() : Date.now(),
-            // ✅ Use backend state field
-            state: e.state || 'Active',
-            eventDate: e.eventDate || '',
-            // ✅ NEW: Default SPOC fields
-            defaultSpocName: e.defaultSpocName || '',
-            defaultSpocEmail: e.defaultSpocEmail || '',
-            defaultSpocSlack: e.defaultSpocSlack || ''
-          };
-        });
-
+        const events: SavedEvent[] = data.events.map((e: any) => ({
+          id:               e.eventId,
+          name:             e.eventName,
+          sheetUrl:         e.sheetUrl,
+          createdAt:        e.createdAt ? new Date(e.createdAt).getTime() : Date.now(),
+          state:            e.state            || 'Active',
+          eventDate:        e.eventDate        || '',
+          defaultSpocName:  e.defaultSpocName  || '',
+          defaultSpocEmail: e.defaultSpocEmail || '',
+          defaultSpocSlack: e.defaultSpocSlack || ''
+        }));
         this.savedEvents.set(events);
         this.persistEvents();
       }
@@ -240,43 +239,34 @@ export class DataService {
     }
   }
 
-
   async getEventFromMasterLog(eventId: string): Promise<SavedEvent | null> {
-    if (!this.HARDCODED_SCRIPT_URL) return null;
-
+    if (!this.SCRIPT_URL) return null;
     try {
-      const response = await fetch(`${this.HARDCODED_SCRIPT_URL}?action=get_event&eventId=${eventId}`);
+      const response = await fetch(`${this.SCRIPT_URL}?action=get_event&eventId=${eventId}`);
       const data = await this.safeJson(response);
-
       if (data.status === 'success' && data.event) {
-        const local = this.savedEvents().find(e => e.id === data.event.id);
-
         const event: SavedEvent = {
-          id: data.event.id,
-          name: data.event.name,
-          sheetUrl: data.event.sheetUrl,
-          createdAt: typeof data.event.createdAt === 'string'
-            ? new Date(data.event.createdAt).getTime()
-            : data.event.createdAt,
-          // ✅ Use backend state
-          state: data.event.state || 'Active',
-          eventDate: data.event.eventDate || '',
-          // ✅ NEW: Default SPOC fields
-          defaultSpocName: data.event.defaultSpocName || '',
+          id:               data.event.id,
+          name:             data.event.name,
+          sheetUrl:         data.event.sheetUrl,
+          createdAt:        typeof data.event.createdAt === 'string'
+                              ? new Date(data.event.createdAt).getTime()
+                              : data.event.createdAt,
+          state:            data.event.state            || 'Active',
+          eventDate:        data.event.eventDate        || '',
+          defaultSpocName:  data.event.defaultSpocName  || '',
           defaultSpocEmail: data.event.defaultSpocEmail || '',
           defaultSpocSlack: data.event.defaultSpocSlack || ''
         };
-
-        if (!local) {
+        const existing = this.savedEvents().find(e => e.id === event.id);
+        if (!existing) {
           this.savedEvents.update(prev => [event, ...prev]);
         } else {
           this.savedEvents.update(prev => prev.map(e => e.id === event.id ? event : e));
         }
         this.persistEvents();
-
         return event;
       }
-
       return null;
     } catch (error) {
       console.error('Failed to fetch event from master log:', error);
@@ -284,34 +274,30 @@ export class DataService {
     }
   }
 
-
-  // --- NEW: Helper to load event data ---
   async loadEventData(sheetUrl: string, sheetName: string): Promise<boolean> {
-    return await this.loadFromBackend(sheetUrl, sheetName);
+    return this.loadFromBackend(sheetUrl, sheetName);
   }
 
   // --- MASTER LOGGING ---
 
   async logEventToBackend(eventData: any) {
-    if (!this.HARDCODED_SCRIPT_URL) return;
+    if (!this.SCRIPT_URL) return;
     try {
-      const response = await fetch(this.HARDCODED_SCRIPT_URL, {
+      const response = await fetch(this.SCRIPT_URL, {
         method: 'POST',
         body: JSON.stringify({
-          action: 'log_event',
-          eventId: eventData.eventId,
-          eventName: eventData.eventName,
-          sheetUrl: eventData.sheetUrl,
-          deskLink: eventData.deskLink,
-          spocLink: eventData.spocLink,
+          action:     'log_event',
+          eventId:    eventData.eventId,
+          eventName:  eventData.eventName,
+          sheetUrl:   eventData.sheetUrl,
+          deskLink:   eventData.deskLink,
+          spocLink:   eventData.spocLink,
           walkinLink: eventData.walkinLink,
-          createdAt: eventData.createdAt
+          createdAt:  eventData.createdAt
         })
       });
       const result = await this.safeJson(response);
-      if (result.status === 'success') {
-        console.log('✓ Event logged to master sheet');
-      } else {
+      if (result.status !== 'success') {
         console.error('Master log error:', result.error);
       }
     } catch (e) {
@@ -328,60 +314,40 @@ export class DataService {
   updateLanyardColor(id: string, newColor: string) {
     const attendee = this.rawAttendees().find(a => a.id === id);
     if (!attendee) return;
-
     this.rawAttendees.update(attendees =>
       attendees.map(a => a.id === id ? { ...a, lanyardColor: newColor } : a)
     );
-
-    this.syncChangeToBackend({
-      email: attendee.email,
-      lanyardColor: newColor
-    });
+    this.syncChangeToBackend({ email: attendee.email, lanyardColor: newColor });
   }
 
   toggleAttendance(id: string) {
     const attendee = this.rawAttendees().find(a => a.id === id);
     if (!attendee) return;
     const newStatus = !attendee.attendance;
-    const newTime = newStatus ? new Date() : null;
-
+    const newTime   = newStatus ? new Date() : null;
     this.rawAttendees.update(attendees =>
-      attendees.map(a => a.id === id ? {
-        ...a,
-        attendance: newStatus,
-        checkInTime: newTime
-      } : a)
+      attendees.map(a => a.id === id ? { ...a, attendance: newStatus, checkInTime: newTime } : a)
     );
-
-    this.syncChangeToBackend({
-      email: attendee.email,
-      attendance: newStatus
-    });
+    this.syncChangeToBackend({ email: attendee.email, attendance: newStatus });
   }
 
   updateNote(id: string, note: string) {
     const attendee = this.rawAttendees().find(a => a.id === id);
     if (!attendee) return;
-
     this.rawAttendees.update(attendees =>
       attendees.map(a => a.id === id ? { ...a, notes: note } : a)
     );
-
-    this.syncChangeToBackend({
-      email: attendee.email,
-      notes: note
-    });
+    this.syncChangeToBackend({ email: attendee.email, notes: note });
   }
 
   /**
    * Adds a walk-in attendee to the event sheet.
    *
-   * @param data          - Attendee form fields.
-   * @param sheetUrlOverride  - Override the active sheet URL (used when called outside a loaded event).
-   * @param defaultSpocValues - SPOC assignment defaults from the event config.
-   * @param autoCheckIn   - When `true`, marks the attendee as checked-in immediately and instructs
-   *                        the backend to fire the confirmation email. Defaults to `false` so that
-   *                        admin-desk manual adds retain the existing toggle-driven flow.
+   * @param data               - Attendee form fields (already validated by the caller).
+   * @param sheetUrlOverride   - Override the active sheet URL.
+   * @param defaultSpocValues  - SPOC assignment defaults from the event config.
+   * @param autoCheckIn        - true  → public form walk-in (auto check-in + email)
+   *                             false → admin desk manual add (toggle controls check-in)
    */
   async addWalkInAttendee(
     data: { fullName: string; email: string; company: string; contact?: string },
@@ -389,41 +355,38 @@ export class DataService {
     defaultSpocValues?: { name?: string; email?: string; slack?: string },
     autoCheckIn: boolean = false
   ): Promise<boolean> {
-    const sheet = sheetUrlOverride || this.currentSheetUrl();
+    const sheet     = sheetUrlOverride || this.currentSheetUrl();
     const sheetName = this.sheetName();
 
-    if (!this.HARDCODED_SCRIPT_URL || !sheet) {
+    if (!this.SCRIPT_URL || !sheet) {
       console.error('Missing configuration: Script URL or Sheet URL');
       return false;
     }
 
-    const newId = crypto.randomUUID();
-    const nameParts = data.fullName.trim().split(/\s+/);
-    const firstName = nameParts[0] || '';
-    const lastName = nameParts.slice(1).join(' ') || '';
-
-    // When autoCheckIn is true we stamp the check-in time optimistically in the
-    // local state so the dashboard reflects the check-in without needing a sync.
+    const newId       = crypto.randomUUID();
+    const nameParts   = data.fullName.trim().split(/\s+/);
+    const firstName   = nameParts[0] || '';
+    const lastName    = nameParts.slice(1).join(' ') || '';
     const checkInTime = autoCheckIn ? new Date() : null;
 
     const newAttendee: Attendee = {
-      id: newId,
-      fullName: data.fullName,
-      email: data.email,
-      company: data.company,
-      contact: data.contact || '',
-      firstName: firstName,
-      lastName: lastName,
-      attendance: autoCheckIn,
-      checkInTime: checkInTime,
-      segment: 'Walk-in',
-      spocName: defaultSpocValues?.name || 'Walk-in',
-      spocEmail: defaultSpocValues?.email || '',
-      spocSlack: defaultSpocValues?.slack || '',
-      lanyardColor: 'Yellow',
-      printStatus: '',
-      leadIntel: '',
-      notes: '',
+      id:           newId,
+      fullName:     data.fullName,
+      email:        data.email,
+      company:      data.company,
+      contact:      data.contact || '',
+      firstName,
+      lastName,
+      attendance:   autoCheckIn,
+      checkInTime,
+      segment:      'Walk-in',
+      spocName:     defaultSpocValues?.name  || 'Walk-in',
+      spocEmail:    defaultSpocValues?.email || '',
+      spocSlack:    defaultSpocValues?.slack || '',
+      lanyardColor: DEFAULT_LANYARD_COLOR,
+      printStatus:  '',
+      leadIntel:    '',
+      notes:        '',
       attendeeType: 'Attendee'
     };
 
@@ -432,44 +395,33 @@ export class DataService {
     }
 
     try {
-      const params = new URLSearchParams({
-        action: 'add',
-        sheetUrl: sheet
-      });
-
+      const params = new URLSearchParams({ action: 'add', sheetUrl: sheet });
       if (sheetName) params.append('sheetName', sheetName);
 
       const payload = {
         ...data,
         firstName,
         lastName,
-        lanyardColor: 'Yellow',
-        // Reflect the auto check-in state so the sheet row is written correctly.
-        attendance: autoCheckIn,
-        // ISO string keeps the GAS script timezone-agnostic; null when not checked in.
-        checkInTime: autoCheckIn ? checkInTime!.toISOString() : null,
-        // Signal to the GAS backend: send the confirmation email for this walk-in.
-        autoCheckIn: autoCheckIn,
-        // Pass default SPOC values to backend
-        defaultSpocName: defaultSpocValues?.name || '',
+        lanyardColor: DEFAULT_LANYARD_COLOR,
+        attendance:   autoCheckIn,
+        checkInTime:  autoCheckIn ? checkInTime!.toISOString() : null,
+        autoCheckIn,
+        defaultSpocName:  defaultSpocValues?.name  || '',
         defaultSpocEmail: defaultSpocValues?.email || '',
         defaultSpocSlack: defaultSpocValues?.slack || '',
         attendeeType: 'Attendee'
       };
 
-      const response = await fetch(`${this.HARDCODED_SCRIPT_URL}?${params.toString()}`, {
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`, {
         method: 'POST',
         body: JSON.stringify(payload)
       });
-
       const res = await this.safeJson(response);
 
-      if (this.currentSheetUrl() === sheet) {
-        if (res.status === 'success' && res.updatedFields) {
-          this.rawAttendees.update(attendees =>
-            attendees.map(a => a.id === newId ? { ...a, ...res.updatedFields } : a)
-          );
-        }
+      if (this.currentSheetUrl() === sheet && res.status === 'success' && res.updatedFields) {
+        this.rawAttendees.update(attendees =>
+          attendees.map(a => a.id === newId ? { ...a, ...res.updatedFields } : a)
+        );
       }
 
       return res.status === 'success';
@@ -479,61 +431,96 @@ export class DataService {
     }
   }
 
+  // --- NETWORKING: fire-with-fallback sync ---
 
-  // --- NETWORKING ---
-
+  /**
+   * Sends a change to the backend with a configurable timeout.
+   * On failure the payload is queued and retried on the next loadFromBackend call.
+   * Sets syncError signal when there are unsynced pending changes.
+   */
   private async syncChangeToBackend(payload: any) {
-    const sheet = this.currentSheetUrl();
+    const sheet     = this.currentSheetUrl();
     const sheetName = this.sheetName();
 
-    if (!this.HARDCODED_SCRIPT_URL || !sheet) {
-      console.warn('Backend not configured properly. Change is local only.');
+    if (!this.SCRIPT_URL || !sheet) {
+      console.warn('Backend not configured. Change is local only.');
       return;
     }
 
-    try {
-      const params = new URLSearchParams({
-        action: 'update',
-        sheetUrl: sheet
-      });
-      if (sheetName) params.append('sheetName', sheetName);
+    const params = new URLSearchParams({ action: 'update', sheetUrl: sheet });
+    if (sheetName) params.append('sheetName', sheetName);
+    const url = `${this.SCRIPT_URL}?${params.toString()}`;
 
-      await fetch(`${this.HARDCODED_SCRIPT_URL}?${params.toString()}`, {
+    try {
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), SYNC_CONFIG.BACKEND_TIMEOUT_MS);
+
+      const response = await fetch(url, {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
-      // Fire and forget
-      console.log('Synced to sheet successfully');
-    } catch (err) {
-      console.error('Failed to sync change to sheet:', err);
+      clearTimeout(timeoutId);
+
+      const result = await this.safeJson(response);
+      if (result.status !== 'success') {
+        console.warn('Sync returned non-success, queuing for retry:', result.error);
+        this.queuePendingSync(payload);
+      } else {
+        if (this.pendingSyncs.length === 0) this.syncError.set(null);
+      }
+    } catch (err: any) {
+      const reason = err?.name === 'AbortError' ? 'timed out' : 'network error';
+      console.warn(`Sync ${reason}, queued for retry:`, payload);
+      this.queuePendingSync(payload);
     }
+  }
+
+  private queuePendingSync(payload: any) {
+    if (this.pendingSyncs.length < SYNC_CONFIG.MAX_PENDING_RETRIES * 10) {
+      this.pendingSyncs.push({ payload, retries: 0 });
+    }
+    this.syncError.set('Some changes haven\'t synced yet. They will retry on the next refresh.');
+  }
+
+  private async flushPendingSyncs() {
+    if (this.pendingSyncs.length === 0) return;
+
+    const queue = [...this.pendingSyncs];
+    this.pendingSyncs = [];
+
+    for (const item of queue) {
+      if (item.retries >= SYNC_CONFIG.MAX_PENDING_RETRIES) {
+        console.error('Dropping sync after max retries:', item.payload);
+        continue;
+      }
+      await this.syncChangeToBackend({ ...item.payload, _retries: item.retries + 1 });
+    }
+
+    if (this.pendingSyncs.length === 0) this.syncError.set(null);
   }
 
   async loadFromBackend(sheetUrl: string, sheetName?: string): Promise<boolean> {
     this.currentSheetUrl.set(sheetUrl);
     if (sheetName) this.sheetName.set(sheetName);
 
-    if (!this.HARDCODED_SCRIPT_URL || !sheetUrl) {
-      alert('Configuration Error: Script URL is missing in code.');
+    if (!this.SCRIPT_URL || !sheetUrl) {
+      alert('Configuration error: Backend URL is not set. Check your .env file.');
       return false;
     }
 
     try {
-      const params = new URLSearchParams({
-        action: 'read',
-        sheetUrl: sheetUrl
-      });
+      const params = new URLSearchParams({ action: 'read', sheetUrl });
       if (sheetName) params.append('sheetName', sheetName);
 
-      const response = await fetch(`${this.HARDCODED_SCRIPT_URL}?${params.toString()}`);
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`);
       const json = await this.safeJson(response);
 
-      if (json.sheetName) {
-        this.sheetName.set(json.sheetName);
-      }
+      if (json.sheetName) this.sheetName.set(json.sheetName);
 
       if (json.attendees) {
         this.parseJsonData(json.attendees);
+        await this.flushPendingSyncs();
         return true;
       } else if (json.error) {
         alert('Google Script Error: ' + json.error);
@@ -543,20 +530,17 @@ export class DataService {
       return false;
     } catch (err) {
       console.error('Fetch error:', err);
-      alert('Please check the internet connection and try again. Failed to connect to backend.');
+      alert('Failed to connect to the backend. Please check your internet connection and try again.');
       return false;
     }
   }
 
   async fetchSheetMetadata(sheetUrl: string): Promise<string[]> {
-    if (!this.HARDCODED_SCRIPT_URL) return [];
+    if (!this.SCRIPT_URL) return [];
     try {
-      const response = await fetch(`${this.HARDCODED_SCRIPT_URL}?action=metadata&sheetUrl=${encodeURIComponent(sheetUrl)}`);
+      const response = await fetch(`${this.SCRIPT_URL}?action=metadata&sheetUrl=${encodeURIComponent(sheetUrl)}`);
       const json = await this.safeJson(response);
-      if (json.status === 'success' && Array.isArray(json.sheets)) {
-        return json.sheets;
-      }
-      return [];
+      return (json.status === 'success' && Array.isArray(json.sheets)) ? json.sheets : [];
     } catch (e) {
       console.error('Failed to fetch metadata', e);
       return [];
@@ -574,6 +558,9 @@ export class DataService {
 
   private parseJsonData(rows: any[]) {
     const parsedData: Attendee[] = rows.map(row => {
+      // Case-insensitive field lookup across all candidate key names.
+      // The backend now sends camelCase keys only; the fallback to raw header
+      // names covers any older cached/legacy data that may still have both styles.
       const get = (...candidates: string[]) => {
         for (const key of candidates) {
           if (row[key] !== undefined && row[key] !== null) return row[key];
@@ -584,20 +571,22 @@ export class DataService {
         return undefined;
       };
 
+      // --- Check-in time parsing ---
       const checkInTimeRaw = get('checkInTime', 'Check-in Time', 'check_in_time', 'time');
       let checkInDate: Date | null = null;
 
       if (checkInTimeRaw && this.cleanString(checkInTimeRaw)) {
-        const dStr = String(checkInTimeRaw).trim();
+        const dStr     = String(checkInTimeRaw).trim();
         const ddmmyyyy = dStr.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(.*)$/);
 
         if (ddmmyyyy) {
-          const day = parseInt(ddmmyyyy[1], 10);
-          const month = parseInt(ddmmyyyy[2], 10);
-          const year = parseInt(ddmmyyyy[3], 10);
+          const day     = parseInt(ddmmyyyy[1], 10);
+          const month   = parseInt(ddmmyyyy[2], 10);
+          const year    = parseInt(ddmmyyyy[3], 10);
           const timeStr = ddmmyyyy[4] || '';
 
           if (day > 12) {
+            // Unambiguous DD/MM/YYYY — reorder to ISO
             const isoDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}${timeStr.replace(/,/g, '')}`;
             const d = new Date(isoDate);
             if (!isNaN(d.getTime())) checkInDate = d;
@@ -611,9 +600,10 @@ export class DataService {
         }
       }
 
+      // --- Name parsing ---
       let fName = this.cleanString(get('firstName', 'First Name', 'firstname'));
-      let lName = this.cleanString(get('lastName', 'Last Name', 'lastname'));
-      let full = this.cleanString(get('fullName', 'Full Name', 'fullname', 'Name'));
+      let lName = this.cleanString(get('lastName',  'Last Name',  'lastname'));
+      let full  = this.cleanString(get('fullName',  'Full Name',  'fullname', 'Name'));
 
       if (!full && (fName || lName)) full = `${fName} ${lName}`.trim();
       if (full && !fName) {
@@ -623,52 +613,46 @@ export class DataService {
       }
       if (!full) full = 'Unknown Attendee';
 
+      // --- SPOC ---
       let spocVal = this.cleanString(get('spocName', 'SPOC of the day', 'spocOfTheDay'));
       if (!spocVal) spocVal = 'Unassigned';
 
-      const attendanceVal = get('attendance', 'Attendance', 'Status', 'Registration Status');
-      const attendanceBool = attendanceVal === true ||
-        attendanceVal === 'TRUE' ||
-        String(attendanceVal).toLowerCase() === 'true' ||
-        String(attendanceVal).toLowerCase() === 'checked in';
+      // --- Attendance ---
+      const attendanceVal  = get('attendance', 'Attendance', 'Status', 'Registration Status');
+      const attendanceBool = attendanceVal === true
+        || attendanceVal === 'TRUE'
+        || String(attendanceVal).toLowerCase() === 'true'
+        || String(attendanceVal).toLowerCase() === 'checked in';
 
-      // NEW: Parse Title and LinkedIn
-      const titleVal = this.cleanString(get('title', 'Title', 'Designation', 'Job Title', 'Role', 'position'));
-      const linkedinVal = this.cleanString(get('linkedin', 'LinkedIn', 'Linkedin Profile', 'LinkedIn URL', 'Profile Link', 'linked_in', 'linkedin_url'));
-
-      // NEW: Parse Attendee Type
+      // --- Attendee type ---
       let attendeeTypeRaw = this.cleanString(get('attendeeType', 'Attendee Type', 'Type', 'Category'));
       let attendeeType: AttendeeType = 'Attendee';
-
       if (attendeeTypeRaw) {
-        if (attendeeTypeRaw.toLowerCase().includes('speaker')) {
-          attendeeType = 'Speaker';
-        } else if (attendeeTypeRaw.toLowerCase().includes('round')) {
-          attendeeType = 'Round Table';
-        }
+        if (attendeeTypeRaw.toLowerCase().includes('speaker'))    attendeeType = 'Speaker';
+        else if (attendeeTypeRaw.toLowerCase().includes('round')) attendeeType = 'Round Table';
       }
 
       return {
-        id: crypto.randomUUID(),
-        fullName: full,
-        firstName: fName,
-        lastName: lName,
-        email: this.cleanString(get('email', 'Email', 'E-mail')),
-        contact: this.cleanString(get('contact', 'Contact', 'Phone', 'Mobile')),
-        company: this.cleanString(get('company', 'Company', 'Organization')),
-        segment: this.cleanString(get('segment', 'Segment', 'Industry')),
+        id:           crypto.randomUUID(),
+        fullName:     full,
+        firstName:    fName,
+        lastName:     lName,
+        email:        this.cleanString(get('email', 'Email', 'E-mail')),
+        contact:      this.cleanString(get('contact', 'Contact', 'Phone', 'Mobile')),
+        company:      this.cleanString(get('company', 'Company', 'Organization')),
+        segment:      this.cleanString(get('segment', 'Segment', 'Industry')),
         lanyardColor: this.cleanString(get('lanyardColor', 'Colour of the Lanyard', 'Color of the Lanyard', 'Lanyard', 'Lanyard Color')),
-        attendance: attendanceBool,
-        spocName: spocVal,
-        spocEmail: this.cleanString(get('spocEmail', 'SPoC email', 'spoc_email')),
-        spocSlack: this.cleanString(get('spocSlack', 'SPoC slack', 'spoc_slack')),
-        printStatus: this.cleanString(get('printStatus', 'Print Status')),
-        checkInTime: checkInDate,
-        leadIntel: this.cleanString(get('leadIntel', 'Account Intel', 'Lead Intel', 'talking points', 'Intel')),
-        notes: this.cleanString(get('notes', 'Note', 'Notes', 'Comment', 'Comments', 'Feedback')),
-        title: titleVal,
-        linkedin: linkedinVal,
-        attendeeType: attendeeType
+        attendance:   attendanceBool,
+        spocName:     spocVal,
+        spocEmail:    this.cleanString(get('spocEmail', 'SPoC email', 'spoc_email')),
+        spocSlack:    this.cleanString(get('spocSlack', 'SPoC slack', 'spoc_slack')),
+        printStatus:  this.cleanString(get('printStatus', 'Print Status')),
+        checkInTime:  checkInDate,
+        leadIntel:    this.cleanString(get('leadIntel', 'Account Intel', 'Lead Intel', 'talking points', 'Intel')),
+        notes:        this.cleanString(get('notes', 'Note', 'Notes', 'Comment', 'Comments', 'Feedback')),
+        title:        this.cleanString(get('title', 'Title', 'Designation', 'Job Title', 'Role', 'position')),
+        linkedin:     this.cleanString(get('linkedin', 'LinkedIn', 'Linkedin Profile', 'LinkedIn URL', 'Profile Link', 'linked_in', 'linkedin_url')),
+        attendeeType
       };
     });
 

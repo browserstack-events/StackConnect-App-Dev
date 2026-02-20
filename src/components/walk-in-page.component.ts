@@ -1,7 +1,7 @@
 import { Component, inject, input, signal, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { DataService } from '../services/data.service';
+import { DataService, validateWalkInData } from '../services/data.service';
 import { Router } from '@angular/router';
 
 @Component({
@@ -139,37 +139,33 @@ import { Router } from '@angular/router';
 })
 export class WalkInPageComponent implements OnInit {
   private dataService = inject(DataService);
-  private router = inject(Router);
+  private router      = inject(Router);
 
   id = input.required<string>();
 
-  fullName = signal('');
-  email = signal('');
-  company = signal('');
-  contact = signal('');
-  submitted = signal(false);
-  submitting = signal(false);
+  fullName     = signal('');
+  email        = signal('');
+  company      = signal('');
+  contact      = signal('');
+  submitted    = signal(false);
+  submitting   = signal(false);
   errorMessage = signal('');
+  eventName    = signal('Event');
 
-  eventName = signal('Event');
-
-  /** Stores the name + company of the successfully registered attendee for badge display. */
   registeredAttendee = signal<{ fullName: string; company: string } | null>(null);
 
   private currentEvent: any = null;
 
   async ngOnInit() {
     const eventId = this.id();
-
     let event = this.dataService.getEventById(eventId);
 
     if (!event) {
       console.log('Event not in localStorage, fetching from master log...');
-      event = await this.dataService.getEventFromMasterLog(eventId);
+      event = await this.dataService.getEventFromMasterLog(eventId) ?? undefined;
     }
 
     if (!event) {
-      console.error('Event not found');
       this.eventName.set('Event Not Found');
       this.errorMessage.set('Event not found. Please contact the event organizer.');
       return;
@@ -178,51 +174,27 @@ export class WalkInPageComponent implements OnInit {
     this.currentEvent = event;
     this.eventName.set(event.name);
     this.dataService.sheetName.set(event.name);
-    console.log('✓ Event loaded for walk-in:', event.name);
   }
 
   async onSubmit() {
     this.errorMessage.set('');
 
-    if (!this.fullName().trim() || !this.email().trim() || !this.company().trim()) {
+    const capturedName    = this.fullName().trim();
+    const capturedEmail   = this.email().trim();
+    const capturedCompany = this.company().trim();
+    const capturedContact = this.contact().trim();
+
+    // Shared validation — same rules as the admin modal
+    const validationError = validateWalkInData({
+      fullName: capturedName,
+      email:    capturedEmail,
+      company:  capturedCompany,
+      contact:  capturedContact || undefined
+    });
+
+    if (validationError) {
+      this.errorMessage.set(validationError);
       return;
-    }
-
-    const emailInput = this.email().trim();
-    const contactInput = this.contact().trim();
-
-    // 1. Valid Email Format Check
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(emailInput)) {
-      this.errorMessage.set("Please enter a valid email address.");
-      return;
-    }
-
-    // 2. Corporate Email Validation
-    const emailLower = emailInput.toLowerCase();
-    const isPersonalOrEdu =
-      emailLower.includes('@gmail.') ||
-      emailLower.includes('@yahoo.') ||
-      emailLower.includes('@zoho.') ||
-      emailLower.includes('.edu') ||
-      emailLower.endsWith('.edu');
-
-    if (isPersonalOrEdu) {
-      this.errorMessage.set("Please enter your corporate email ID. Personal accounts are not accepted.");
-      return;
-    }
-
-    // 3. Contact Number Validation (If provided)
-    if (contactInput) {
-      const hasCountryCode = contactInput.startsWith('+');
-      const digitCount = contactInput.replace(/[^0-9]/g, '').length;
-      const isValidLength = digitCount >= 7 && digitCount <= 15;
-      const isValidChars = /^\+[0-9\s\-\(\).]+$/.test(contactInput);
-
-      if (!hasCountryCode || !isValidLength || !isValidChars) {
-        this.errorMessage.set("Please enter a valid international phone number starting with a country code (e.g. +1 ...).");
-        return;
-      }
     }
 
     if (!this.currentEvent) {
@@ -232,21 +204,16 @@ export class WalkInPageComponent implements OnInit {
 
     this.submitting.set(true);
 
-    // Capture values before the async call; signal reads after await may
-    // return stale values if the form is reset mid-flight.
-    const capturedName = this.fullName().trim();
-    const capturedCompany = this.company().trim();
-
     const success = await this.dataService.addWalkInAttendee(
       {
         fullName: capturedName,
-        email: emailInput,
-        company: capturedCompany,
-        contact: contactInput
+        email:    capturedEmail,
+        company:  capturedCompany,
+        contact:  capturedContact
       },
       this.currentEvent.sheetUrl,
       {
-        name: this.currentEvent.defaultSpocName,
+        name:  this.currentEvent.defaultSpocName,
         email: this.currentEvent.defaultSpocEmail,
         slack: this.currentEvent.defaultSpocSlack
       },

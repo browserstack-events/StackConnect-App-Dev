@@ -1,4 +1,9 @@
 import { Injectable, signal } from '@angular/core';
+import { STORAGE_KEYS } from '../constants';
+
+// TODO: Replace this entire service with real authentication once auth is implemented.
+// See PLAN.md §2.1 for the recommended authentication direction.
+// The "dummy user" below is a placeholder and intentionally contains no real credentials.
 
 export interface DummyUser {
   name: string;
@@ -9,28 +14,21 @@ export interface DummyUser {
   providedIn: 'root'
 })
 export class DummyAuthService {
-  // Dummy user data
+  /** Placeholder user — replaced when real auth is implemented. */
   private readonly DUMMY_USER: DummyUser = {
-    name: 'Harsh',
-    email: 'harshvardhan@browserstack.com'
+    name:  'SPOC User',
+    email: 'spoc@company.com'
   };
 
-  // Auth state
-  private loggedIn = signal<boolean>(false);
-  private currentUser = signal<DummyUser | null>(null);
+  private loggedIn     = signal<boolean>(false);
+  private currentUser  = signal<DummyUser | null>(null);
 
   constructor() {
-    // Check if user was previously logged in (persisted in localStorage)
     this.loadAuthState();
   }
 
-  isLoggedIn() {
-    return this.loggedIn.asReadonly();
-  }
-
-  getUser() {
-    return this.currentUser.asReadonly();
-  }
+  isLoggedIn() { return this.loggedIn.asReadonly(); }
+  getUser()    { return this.currentUser.asReadonly(); }
 
   signIn() {
     this.loggedIn.set(true);
@@ -47,8 +45,7 @@ export class DummyAuthService {
   private loadAuthState() {
     try {
       if (typeof localStorage === 'undefined') return;
-      const stored = localStorage.getItem('dummy_auth_state');
-      if (stored === 'logged_in') {
+      if (localStorage.getItem(STORAGE_KEYS.AUTH_STATE) === 'logged_in') {
         this.loggedIn.set(true);
         this.currentUser.set(this.DUMMY_USER);
       }
@@ -60,7 +57,7 @@ export class DummyAuthService {
   private saveAuthState() {
     try {
       if (typeof localStorage === 'undefined') return;
-      localStorage.setItem('dummy_auth_state', 'logged_in');
+      localStorage.setItem(STORAGE_KEYS.AUTH_STATE, 'logged_in');
     } catch (e) {
       console.warn('Could not save auth state to localStorage');
     }
@@ -69,7 +66,7 @@ export class DummyAuthService {
   private clearAuthState() {
     try {
       if (typeof localStorage === 'undefined') return;
-      localStorage.removeItem('dummy_auth_state');
+      localStorage.removeItem(STORAGE_KEYS.AUTH_STATE);
     } catch (e) {
       console.warn('Could not clear auth state from localStorage');
     }
