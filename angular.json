@@ -17,8 +17,7 @@
               "browser": "."
             },
             "browser": "index.tsx",
-            "tsConfig": "tsconfig.json",
-            "styles": ["src/styles.css"]
+            "tsConfig": "tsconfig.json"
           },
           "configurations": {
             "production": {
