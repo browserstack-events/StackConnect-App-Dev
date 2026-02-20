@@ -87,20 +87,12 @@ export class DataService {
 
   /**
    * GAS endpoint URL — read from the VITE_GAS_URL environment variable at
-   * build time. Falls back to empty string so the app degrades gracefully
-   * rather than throwing at startup.
-   *
-   * To configure locally: create a .env file (see .env.example) with:
-   *   VITE_GAS_URL=https://script.google.com/macros/s/<deployment_id>/exec
-   *
-   * For GitHub Pages CI: add VITE_GAS_URL as a repository secret and inject
-   * it during the build step in .github/workflows/deploy.yml.
+   * Angular's esbuild builder does not inject VITE_* env vars automatically,
+   * so the URL is hardcoded here. Replace with your own GAS deployment URL
+   * if you redeploy the backend.
    */
-  private readonly SCRIPT_URL: string =
-    (typeof (import.meta as any).env !== 'undefined'
-      ? (import.meta as any).env['VITE_GAS_URL']
-      : undefined)
-    ?? '';
+  private readonly SCRIPT_URL =
+    'https://script.google.com/macros/s/AKfycbxCsdkPGi3-rxDTWAJIHfK6O70GaPSmJmlqLYTlX8jxFE7MqOS7koul0uSKTynDXKOa/exec';
 
   private currentSheetUrl = signal('');
 
