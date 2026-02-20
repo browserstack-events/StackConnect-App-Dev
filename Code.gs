@@ -1,10 +1,15 @@
 /**
- * SALES SPOC DASHBOARD BACKEND - Version 9
+ * SALES SPOC DASHBOARD BACKEND - Version 10
  * Integrated Check-In Email Notification System
- * - Sends email alerts to SPOC when attendees check in
- * - Includes attendee summary lists in emails
- * - Tracks email sending status to prevent duplicates
- * - Added Designation & LinkedIn column support
+ *
+ * Changes from v9:
+ * - 1.1: Removed duplicate getAllEventsFromMaster, updateEventInMaster, getEventFromMaster
+ * - 1.2: Fixed lock double-release (updateAttendee returns {response, lockReleased})
+ * - 2.2: Added validatePayload() — checked before acquiring lock
+ * - 2.3: Added escapeHtml() — applied to all user data in email bodies
+ * - 3.2: readData() emits camelCase keys only (removed duplicate raw-header keys)
+ * - 3.3: getMasterColumnMap() replaces magic column numbers in master sheet functions
+ * - 3.4: getColumnIndices() replaced else-if chain with alias config map + reverse lookup
  */
 
 const MASTER_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1gtZuWwqtI-oI3njQy5hKxmgIfcnyDiRM5FSOBiHeUeA/edit?gid=493451901#gid=493451901';
@@ -13,12 +18,10 @@ function doGet(e) {
   if (!e.parameter.action && !e.postData) {
     return ContentService.createTextOutput(JSON.stringify({
       status: 'online',
-      version: 'v9-email-notifications',
-      timestamp: new Date().toISOString(),
-      hasEmailFunction: typeof sendCheckInNotification !== 'undefined'
+      version: 'v10',
+      timestamp: new Date().toISOString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
-
   return handleRequest(e);
 }
 
@@ -28,24 +31,13 @@ function doPost(e) {
 
 function handleRequest(e) {
   try {
-    // 1. Parse Parameters immediately
     const params = e.parameter || {};
     const postData = e.postData ? JSON.parse(e.postData.contents) : {};
-    
-    // Merge params and postData for easier handling
     const data = { ...params, ...postData };
     const action = data.action;
 
-    // 2. SEGREGATION: Identify Action Type
-    // READ Actions (No Lock needed - High Concurrency)
     const readActions = ['read', 'get_event', 'get_all_events', 'metadata'];
-    
-    if (readActions.includes(action)) {
-      return handleReadActions(action, data);
-    }
-
-    // WRITE Actions (Lock Required - Data Safety)
-    // 'update', 'add', 'log_event', 'update_event'
+    if (readActions.includes(action)) return handleReadActions(action, data);
     return handleWriteActions(action, data);
 
   } catch (error) {
@@ -54,16 +46,13 @@ function handleRequest(e) {
 }
 
 function handleReadActions(action, data) {
-  // --- MASTER SHEET READS ---
   if (action === 'get_event') return getEventFromMaster(data.eventId);
   if (action === 'get_all_events') return getAllEventsFromMaster();
 
-  // --- EVENT SHEET READS ---
   if (!data.sheetUrl && !data.sheetName) {
-     return jsonResponse({ status: 'error', error: 'Missing sheetUrl or sheetName' });
+    return jsonResponse({ status: 'error', error: 'Missing sheetUrl or sheetName' });
   }
 
-  // Open Spreadsheet
   let ss;
   try {
     ss = data.sheetUrl ? SpreadsheetApp.openByUrl(data.sheetUrl) : SpreadsheetApp.getActiveSpreadsheet();
@@ -72,8 +61,7 @@ function handleReadActions(action, data) {
   }
 
   if (action === 'metadata') {
-    const sheetNames = ss.getSheets().map(s => s.getName());
-    return jsonResponse({ status: 'success', sheets: sheetNames });
+    return jsonResponse({ status: 'success', sheets: ss.getSheets().map(s => s.getName()) });
   }
 
   if (action === 'read') {
@@ -81,55 +69,45 @@ function handleReadActions(action, data) {
     const sheet = ss.getSheetByName(sheetName);
     if (!sheet) return jsonResponse({ status: 'error', error: `Sheet "${sheetName}" not found` });
 
-    // *** CACHING LAYER ***
-    // We cache the "read" response for 15 seconds.
-    // This prevents 50 SPOCs from hammering the sheet simultaneously.
     const cache = CacheService.getScriptCache();
-    const cacheKey = 'read_' + sheet.getSheetId(); // Unique ID for this specific sheet
+    const cacheKey = 'read_' + sheet.getSheetId();
     const cachedResponse = cache.get(cacheKey);
-
     if (cachedResponse) {
-      // Serve from RAM (Super Fast)
       return ContentService.createTextOutput(cachedResponse).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // If not in cache, read from Sheet (Slow)
     const resultResponse = readData(sheet);
-    
-    // Save to Cache for next user (Store for 15 seconds)
-    // Note: CacheService has a size limit (100KB). If data is huge, put() might fail, 
-    // so we wrap it in try/catch to ensure the app doesn't crash.
     try {
-      const responseString = resultResponse.getContent();
-      cache.put(cacheKey, responseString, 15); 
+      cache.put(cacheKey, resultResponse.getContent(), 15);
     } catch (e) {
       Logger.log('Cache save failed (likely too big): ' + e.toString());
     }
-
     return resultResponse;
   }
 
   return jsonResponse({ status: 'error', error: 'Unknown Read Action' });
 }
 
+// 2.2: validatePayload is called BEFORE acquiring the lock — fail fast on bad input
 function handleWriteActions(action, data) {
-  const lock = LockService.getScriptLock();
-  
-  // Try to get lock for 10 seconds.
-  // If the server is busy processing another WRITE, this waits.
-  // READS do not trigger this wait.
-  const hasLock = lock.tryLock(10000); 
+  const validationErrors = validatePayload(action, data);
+  if (validationErrors.length > 0) {
+    return jsonResponse({ status: 'error', error: 'Validation failed: ' + validationErrors.join('; ') });
+  }
 
+  const lock = LockService.getScriptLock();
+  const hasLock = lock.tryLock(10000);
   if (!hasLock) {
     return jsonResponse({ status: 'error', error: 'Server is busy. Please try again.' });
   }
 
+  // 1.2: Track whether the lock was released early inside updateAttendee
+  let lockReleased = false;
+
   try {
-    // --- MASTER SHEET WRITES ---
     if (action === 'log_event') return logEventToMaster(data);
     if (action === 'update_event') return updateEventInMaster(data);
 
-    // --- EVENT SHEET WRITES ---
     let ss;
     if (data.sheetUrl) {
       ss = SpreadsheetApp.openByUrl(data.sheetUrl);
@@ -148,19 +126,17 @@ function handleWriteActions(action, data) {
 
     if (action === 'add') {
       const result = addWalkIn(sheet, data);
-      
-      // Clear the cache because we just changed data!
       clearSheetCache(sheet.getSheetId());
       return result;
     }
 
     if (action === 'update') {
-      // Pass the lock so updateAttendee can release it early if it needs to send emails
+      // 1.2: updateAttendee returns { response, lockReleased } so the finally
+      // block below knows not to release the lock a second time.
       const result = updateAttendee(sheet, data, lock);
-      
-      // Clear the cache because we just changed data!
+      lockReleased = result.lockReleased || false;
       clearSheetCache(sheet.getSheetId());
-      return result;
+      return result.response;
     }
 
     return jsonResponse({ status: 'error', error: 'Unknown Write Action' });
@@ -168,25 +144,36 @@ function handleWriteActions(action, data) {
   } catch (error) {
     return jsonResponse({ status: 'error', error: error.toString() });
   } finally {
-    // Always release lock if it hasn't been released yet
-    try { lock.releaseLock(); } catch (e) {}
+    // 1.2: Only release if updateAttendee didn't already do so
+    if (!lockReleased) {
+      try { lock.releaseLock(); } catch (e) {}
+    }
   }
 }
 
-// Helper to invalidate cache when data changes
 function clearSheetCache(sheetId) {
   try {
-    const cache = CacheService.getScriptCache();
-    cache.remove('read_' + sheetId);
+    CacheService.getScriptCache().remove('read_' + sheetId);
   } catch (e) {
     Logger.log('Failed to clear cache: ' + e);
   }
 }
 
+// ─── MASTER SHEET HELPERS ────────────────────────────────────────────────────
+
 /**
- * ✅ UPDATED: logEventToMaster
- * Preserves 'State' and 'Default SPOC' columns from your current codebase
+ * 3.3: Returns a map of { "Column Header" → 1-based column index } for the
+ * master sheet. Used in place of hardcoded column numbers throughout.
  */
+function getMasterColumnMap(masterSheet) {
+  const headers = masterSheet.getRange(1, 1, 1, masterSheet.getLastColumn()).getValues()[0];
+  const map = {};
+  headers.forEach(function (h, i) {
+    if (h) map[h.toString().trim()] = i + 1; // 1-based for getRange
+  });
+  return map;
+}
+
 function logEventToMaster(data) {
   if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR_MASTER_SHEET_ID')) {
     return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured in Apps Script' });
@@ -230,6 +217,7 @@ function logEventToMaster(data) {
   }
 }
 
+// 1.1: Single authoritative copy (duplicate removed)
 function getAllEventsFromMaster() {
   if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR')) {
     return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured' });
@@ -238,132 +226,28 @@ function getAllEventsFromMaster() {
   try {
     const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
     const masterSheet = ss.getSheetByName('Master Event Log');
-
     if (!masterSheet) return jsonResponse({ status: 'success', events: [] });
 
     const data = masterSheet.getDataRange().getValues();
+    if (data.length < 2) return jsonResponse({ status: 'success', events: [] });
+
+    // 3.3: Use column map so row order doesn't matter
+    const cols = getMasterColumnMap(masterSheet);
     const events = [];
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      if (row[0]) {
+      if (row[cols['Event ID'] - 1]) {
         events.push({
-          eventId: row[0],
-          eventName: row[1],
-          sheetUrl: row[3],
-          createdAt: row[7],
-          eventDate: row[8] || '',
-          state: row[9] || 'Active',
-          defaultSpocName: row[10] || '',
-          defaultSpocEmail: row[11] || '',
-          defaultSpocSlack: row[12] || ''
-        });
-      }
-    }
-    return jsonResponse({ status: 'success', events: events });
-  } catch (error) {
-    return jsonResponse({ status: 'error', error: 'Failed to fetch events: ' + error.toString() });
-  }
-}
-
-function updateEventInMaster(data) {
-  if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR')) return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured' });
-  if (!data.eventId) return jsonResponse({ status: 'error', error: 'eventId is required' });
-
-  try {
-    const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
-    const masterSheet = ss.getSheetByName('Master Event Log');
-    if (!masterSheet) return jsonResponse({ status: 'error', error: 'Master Event Log sheet not found' });
-
-    const values = masterSheet.getDataRange().getValues();
-    let targetRow = -1;
-
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][0]) === String(data.eventId)) {
-        targetRow = i + 1;
-        break;
-      }
-    }
-
-    if (targetRow === -1) return jsonResponse({ status: 'error', error: 'Event ID not found: ' + data.eventId });
-
-    // Update fields (State, Date, Defaults)
-    if (data.state !== undefined) masterSheet.getRange(targetRow, 10).setValue(data.state);
-    if (data.eventDate !== undefined) masterSheet.getRange(targetRow, 9).setValue(data.eventDate);
-    if (data.defaultSpocName !== undefined) masterSheet.getRange(targetRow, 11).setValue(data.defaultSpocName);
-    if (data.defaultSpocEmail !== undefined) masterSheet.getRange(targetRow, 12).setValue(data.defaultSpocEmail);
-    if (data.defaultSpocSlack !== undefined) masterSheet.getRange(targetRow, 13).setValue(data.defaultSpocSlack);
-
-    SpreadsheetApp.flush();
-    return jsonResponse({ status: 'success', message: 'Event updated successfully', eventId: data.eventId });
-  } catch (error) {
-    return jsonResponse({ status: 'error', error: 'Failed to update event: ' + error.toString() });
-  }
-}
-
-function getEventFromMaster(eventId) {
-  if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR')) return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured' });
-
-  try {
-    const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
-    const masterSheet = ss.getSheetByName('Master Event Log');
-    if (!masterSheet) return jsonResponse({ status: 'error', error: 'Master Event Log sheet not found' });
-
-    const data = masterSheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(eventId)) {
-        const row = data[i];
-        return jsonResponse({
-          status: 'success', event: {
-            id: row[0], name: row[1], sheetName: row[2], sheetUrl: row[3],
-            deskLink: row[4], spocLink: row[5], walkinLink: row[6], createdAt: row[7],
-            eventDate: row[8] || '', state: row[9] || 'Active',
-            defaultSpocName: row[10] || '', defaultSpocEmail: row[11] || '', defaultSpocSlack: row[12] || ''
-          }
-        });
-      }
-    }
-    return jsonResponse({ status: 'error', error: 'Event ID not found: ' + eventId });
-  } catch (error) {
-    return jsonResponse({ status: 'error', error: 'Failed to retrieve event: ' + error.toString() });
-  }
-}
-
-/**
- * UPDATED: getAllEventsFromMaster
- * - Returns 'state' instead of 'archived'
- * - Returns default SPOC fields
- */
-function getAllEventsFromMaster() {
-  if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR')) {
-    return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured' });
-  }
-
-  try {
-    const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
-    const masterSheet = ss.getSheetByName('Master Event Log');
-
-    if (!masterSheet) {
-      return jsonResponse({ status: 'success', events: [] });
-    }
-
-    const data = masterSheet.getDataRange().getValues();
-    const events = [];
-
-    // Skip header row
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      if (row[0]) {
-        events.push({
-          eventId: row[0],
-          eventName: row[1],
-          sheetUrl: row[3],
-          createdAt: row[7],
-          eventDate: row[8] || '',
-          state: row[9] || 'Active',           // Column 10
-          defaultSpocName: row[10] || '',      // Column 11
-          defaultSpocEmail: row[11] || '',     // Column 12
-          defaultSpocSlack: row[12] || ''      // Column 13
+          eventId:          row[cols['Event ID'] - 1],
+          eventName:        row[cols['Event Name'] - 1],
+          sheetUrl:         row[cols['Spreadsheet URL'] - 1],
+          createdAt:        row[cols['Created At'] - 1],
+          eventDate:        row[cols['Event Date'] - 1] || '',
+          state:            row[cols['State'] - 1] || 'Active',
+          defaultSpocName:  row[cols['Default SPOC Name'] - 1] || '',
+          defaultSpocEmail: row[cols['Default SPOC Email'] - 1] || '',
+          defaultSpocSlack: row[cols['Default SPOC Slack'] - 1] || ''
         });
       }
     }
@@ -374,17 +258,12 @@ function getAllEventsFromMaster() {
   }
 }
 
-
-/**
- * UPDATED: updateEventInMaster
- * - Supports updating 'state' (Active/Archived/Deleted)
- * - Supports updating default SPOC fields
- */
+// 1.1: Single authoritative copy (duplicate removed)
+// 3.3: Uses getMasterColumnMap — no magic column numbers
 function updateEventInMaster(data) {
   if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR')) {
     return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured' });
   }
-
   if (!data.eventId) {
     return jsonResponse({ status: 'error', error: 'eventId is required' });
   }
@@ -392,91 +271,63 @@ function updateEventInMaster(data) {
   try {
     const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
     const masterSheet = ss.getSheetByName('Master Event Log');
+    if (!masterSheet) return jsonResponse({ status: 'error', error: 'Master Event Log sheet not found' });
 
-    if (!masterSheet) {
-      return jsonResponse({ status: 'error', error: 'Master Event Log sheet not found' });
-    }
+    const values = masterSheet.getDataRange().getValues();
+    const cols = getMasterColumnMap(masterSheet);
 
-    const dataRange = masterSheet.getDataRange();
-    const values = dataRange.getValues();
-
-    // Find the row with matching eventId
     let targetRow = -1;
     for (let i = 1; i < values.length; i++) {
-      if (String(values[i][0]) === String(data.eventId)) {
-        targetRow = i + 1; // Convert to 1-based index
+      if (String(values[i][cols['Event ID'] - 1]) === String(data.eventId)) {
+        targetRow = i + 1; // convert to 1-based sheet row
         break;
       }
     }
 
     if (targetRow === -1) {
-      return jsonResponse({
-        status: 'error',
-        error: 'Event ID not found: ' + data.eventId
-      });
+      return jsonResponse({ status: 'error', error: 'Event ID not found: ' + data.eventId });
     }
 
     const updates = [];
 
-    // Update state (column 10)
     if (data.state !== undefined) {
       const validStates = ['Active', 'Archived', 'Deleted'];
       if (validStates.indexOf(data.state) === -1) {
-        return jsonResponse({
-          status: 'error',
-          error: 'Invalid state. Must be: Active, Archived, or Deleted'
-        });
+        return jsonResponse({ status: 'error', error: 'Invalid state. Must be: Active, Archived, or Deleted' });
       }
-      masterSheet.getRange(targetRow, 10).setValue(data.state);
+      masterSheet.getRange(targetRow, cols['State']).setValue(data.state);
       updates.push('state=' + data.state);
-      Logger.log('Updated state to: ' + data.state);
     }
 
-    // Update event date (column 9)
     if (data.eventDate !== undefined) {
-      masterSheet.getRange(targetRow, 9).setValue(data.eventDate);
+      masterSheet.getRange(targetRow, cols['Event Date']).setValue(data.eventDate);
       updates.push('eventDate=' + data.eventDate);
-      Logger.log('Updated event date to: ' + data.eventDate);
     }
 
-    // Update default SPOC name (column 11)
     if (data.defaultSpocName !== undefined) {
-      masterSheet.getRange(targetRow, 11).setValue(data.defaultSpocName);
+      masterSheet.getRange(targetRow, cols['Default SPOC Name']).setValue(data.defaultSpocName);
       updates.push('defaultSpocName=' + data.defaultSpocName);
-      Logger.log('Updated default SPOC name to: ' + data.defaultSpocName);
     }
 
-    // Update default SPOC email (column 12)
     if (data.defaultSpocEmail !== undefined) {
-      masterSheet.getRange(targetRow, 12).setValue(data.defaultSpocEmail);
+      masterSheet.getRange(targetRow, cols['Default SPOC Email']).setValue(data.defaultSpocEmail);
       updates.push('defaultSpocEmail=' + data.defaultSpocEmail);
-      Logger.log('Updated default SPOC email to: ' + data.defaultSpocEmail);
     }
 
-    // Update default SPOC slack (column 13)
     if (data.defaultSpocSlack !== undefined) {
-      masterSheet.getRange(targetRow, 13).setValue(data.defaultSpocSlack);
+      masterSheet.getRange(targetRow, cols['Default SPOC Slack']).setValue(data.defaultSpocSlack);
       updates.push('defaultSpocSlack=' + data.defaultSpocSlack);
-      Logger.log('Updated default SPOC slack to: ' + data.defaultSpocSlack);
     }
 
     SpreadsheetApp.flush();
-
-    return jsonResponse({
-      status: 'success',
-      message: 'Event updated: ' + updates.join(', '),
-      eventId: data.eventId
-    });
-
+    return jsonResponse({ status: 'success', message: 'Event updated: ' + updates.join(', '), eventId: data.eventId });
   } catch (error) {
-    Logger.log('❌ ERROR in updateEventInMaster: ' + error.toString());
-    return jsonResponse({
-      status: 'error',
-      error: 'Failed to update event: ' + error.toString()
-    });
+    return jsonResponse({ status: 'error', error: 'Failed to update event: ' + error.toString() });
   }
 }
 
+// 1.1: Single authoritative copy (duplicate removed)
+// 3.3: Uses getMasterColumnMap — no magic column numbers
 function getEventFromMaster(eventId) {
   if (!MASTER_SHEET_URL || MASTER_SHEET_URL.includes('YOUR')) {
     return jsonResponse({ status: 'error', error: 'MASTER_SHEET_URL not configured' });
@@ -485,33 +336,32 @@ function getEventFromMaster(eventId) {
   try {
     const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
     const masterSheet = ss.getSheetByName('Master Event Log');
-
-    if (!masterSheet) {
-      return jsonResponse({ status: 'error', error: 'Master Event Log sheet not found' });
-    }
+    if (!masterSheet) return jsonResponse({ status: 'error', error: 'Master Event Log sheet not found' });
 
     const data = masterSheet.getDataRange().getValues();
+    const cols = getMasterColumnMap(masterSheet);
 
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(eventId)) {
+      if (String(data[i][cols['Event ID'] - 1]) === String(eventId)) {
         const row = data[i];
-        const event = {
-          id: row[0],
-          name: row[1],
-          sheetName: row[2],
-          sheetUrl: row[3],
-          deskLink: row[4],
-          spocLink: row[5],
-          walkinLink: row[6],
-          createdAt: row[7],
-          eventDate: row[8] || '',
-          state: row[9] || 'Active',
-          defaultSpocName: row[10] || '',
-          defaultSpocEmail: row[11] || '',
-          defaultSpocSlack: row[12] || ''
-        };
-
-        return jsonResponse({ status: 'success', event: event });
+        return jsonResponse({
+          status: 'success',
+          event: {
+            id:               row[cols['Event ID'] - 1],
+            name:             row[cols['Event Name'] - 1],
+            sheetName:        row[cols['Sheet Name'] - 1],
+            sheetUrl:         row[cols['Spreadsheet URL'] - 1],
+            deskLink:         row[cols['Desk Link'] - 1],
+            spocLink:         row[cols['Sales SPOC Link'] - 1],
+            walkinLink:       row[cols['Walkin Link'] - 1],
+            createdAt:        row[cols['Created At'] - 1],
+            eventDate:        row[cols['Event Date'] - 1] || '',
+            state:            row[cols['State'] - 1] || 'Active',
+            defaultSpocName:  row[cols['Default SPOC Name'] - 1] || '',
+            defaultSpocEmail: row[cols['Default SPOC Email'] - 1] || '',
+            defaultSpocSlack: row[cols['Default SPOC Slack'] - 1] || ''
+          }
+        });
       }
     }
 
@@ -521,28 +371,22 @@ function getEventFromMaster(eventId) {
   }
 }
 
+// ─── EVENT SHEET FUNCTIONS ───────────────────────────────────────────────────
 
+// 3.2: Emits camelCase keys only — removes the duplicate raw-header key that
+// doubled every payload.
 function readData(sheet) {
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const rows = data.slice(1);
 
-  Logger.log('Sheet columns: ' + headers.join(', '));
-
   const attendees = rows.map(row => {
-    let obj = {};
+    const obj = {};
     headers.forEach((h, i) => {
-      const key = camelize(h.toString());
-      obj[key] = row[i];
-      obj[h] = row[i];
+      obj[camelize(h.toString())] = row[i]; // camelCase key only
     });
     return obj;
   });
-
-  if (attendees.length > 0) {
-    const sample = attendees[0];
-    Logger.log('Sample attendee data - Title: ' + (sample.title || sample.Designation) + ', LinkedIn: ' + (sample.linkedin || sample.LinkedIn));
-  }
 
   return jsonResponse({
     status: 'success',
@@ -562,7 +406,6 @@ function addWalkIn(sheet, data) {
     // autoCheckIn=false → admin manual add (leave unchecked, no notification)
     const autoCheckIn = data.autoCheckIn === true || data.autoCheckIn === 'true';
 
-    // Copy formulas only for specific columns
     const columnsToCopy = ['print status'];
 
     headers.forEach(function (header, i) {
@@ -573,11 +416,9 @@ function addWalkIn(sheet, data) {
         const cellAbove = sheet.getRange(lastRowIndex, i + 1);
         val = cellAbove.getFormulaR1C1() || cellAbove.getValue() || '';
       }
-      // Populate SPOC from defaults in data
       else if (h === 'spoc of the day' || h === 'spoc name') val = data.defaultSpocName || '';
       else if (h === 'spoc email' || h === 'spoc_email') val = data.defaultSpocEmail || '';
       else if (h === 'spoc slack' || h === 'spoc_slack') val = data.defaultSpocSlack || '';
-      // Personal & Event Info
       else if (h === 'first name') val = data.firstName || '';
       else if (h === 'last name') val = data.lastName || '';
       else if (h === 'full name') val = data.fullName || '';
@@ -596,14 +437,15 @@ function addWalkIn(sheet, data) {
       newRow.push(val);
     });
 
-    // targetRow is the 1-based sheet row where the new walk-in was written
+    // INDEX EXPLANATION:
+    // Google Sheets is 1-based: Row 1 = headers, Row 2 = first data row.
+    // targetRow = lastRowIndex + 1 (1-based row where we just wrote the new walk-in).
+    // allValues[targetRow - 1] = the row we just wrote (Sheet row targetRow).
+    // sendCheckInNotification expects a 0-based index into allValues, so we pass targetRow - 1.
     const targetRow = lastRowIndex + 1;
     sheet.getRange(targetRow, 1, 1, newRow.length).setValues([newRow]);
     SpreadsheetApp.flush();
 
-    // If autoCheckIn, fire email + Slack notification now.
-    // Read all values after flush so the summary list is current.
-    // allValues[targetRow - 1] is the row we just wrote (Sheet row targetRow, 0-based index targetRow-1).
     if (autoCheckIn) {
       try {
         const allValues = sheet.getDataRange().getValues();
@@ -613,7 +455,6 @@ function addWalkIn(sheet, data) {
       }
     }
 
-    // Read back to confirm SPOC fields
     const writtenRow = sheet.getRange(targetRow, 1, 1, headers.length).getValues()[0];
     const updatedFields = {};
     headers.forEach(function (header, i) {
@@ -628,21 +469,20 @@ function addWalkIn(sheet, data) {
   }
 }
 
+// 1.2: Returns { response, lockReleased } so handleWriteActions knows whether
+// to release the lock in its finally block.
 function updateAttendee(sheet, data, lock) {
   Logger.log('🔔 updateAttendee() CALLED for ' + data.email);
 
   const values = sheet.getDataRange().getValues();
   const headers = values[0];
 
-  // 1. Email Column Finding
   let emailIndex = -1;
   headers.forEach((h, i) => { if (['email', 'e-mail'].includes(h.toString().toLowerCase().trim())) emailIndex = i; });
-  if (emailIndex === -1) return jsonResponse({ status: 'error', error: 'Email column not found' });
+  if (emailIndex === -1) return { response: jsonResponse({ status: 'error', error: 'Email column not found' }), lockReleased: false };
 
-  // 2. Get Column Indices
   const indices = getColumnIndices(headers);
 
-  // 3. Find the Correct Row (using the smart lookup from the previous fix)
   let rowIndex = -1;
   const targetEmail = String(data.email).toLowerCase().trim();
   const isCheckInAction = (data.attendance === true || String(data.attendance).toLowerCase() === 'true');
@@ -650,12 +490,12 @@ function updateAttendee(sheet, data, lock) {
   for (let i = 1; i < values.length; i++) {
     const rowEmail = String(values[i][emailIndex]).toLowerCase().trim();
     if (rowEmail === targetEmail) {
-      const rowIsCheckedIn = indices.attendance > -1 
+      const rowIsCheckedIn = indices.attendance > -1
         ? (String(values[i][indices.attendance]).toUpperCase() === 'TRUE')
         : false;
-      
+
       if (isCheckInAction) {
-        if (!rowIsCheckedIn) { rowIndex = i + 1; break; } 
+        if (!rowIsCheckedIn) { rowIndex = i + 1; break; }
         else if (rowIndex === -1) { rowIndex = i + 1; }
       } else {
         rowIndex = i + 1; break;
@@ -663,11 +503,10 @@ function updateAttendee(sheet, data, lock) {
     }
   }
 
-  if (rowIndex === -1) return jsonResponse({ status: 'error', error: 'Attendee email not found' });
+  if (rowIndex === -1) return { response: jsonResponse({ status: 'error', error: 'Attendee email not found' }), lockReleased: false };
 
-  // 4. Update Logic
   const now = new Date();
-  let emailTriggerNeeded = false; // Flag to track if we need to send email
+  let emailTriggerNeeded = false;
 
   Object.keys(data).forEach(function (key) {
     if (key.startsWith('_')) return;
@@ -683,99 +522,93 @@ function updateAttendee(sheet, data, lock) {
       const val = data[key];
 
       if (key === 'attendance' && val === true) {
-        // Update Timestamp
         if (indices.timestamp > -1) {
           sheet.getRange(rowIndex, indices.timestamp + 1).setValue(now);
           values[rowIndex - 1][indices.timestamp] = now;
         }
-        
-        // Update in-memory value
         values[rowIndex - 1][colIndex] = true;
-        
-        // Mark flag to send email LATER
-        emailTriggerNeeded = true; 
+        emailTriggerNeeded = true;
       }
 
-      // Update the actual sheet cell
       sheet.getRange(rowIndex, colIndex + 1).setValue(val);
     }
   });
 
-  // 5. CRITICAL PERFORMANCE FIX: 
-  // Write changes to disk and release the lock IMMEDIATELY.
-  SpreadsheetApp.flush(); 
-  
+  SpreadsheetApp.flush();
+
+  // 1.2: Release the lock early so the next writer isn't blocked while email sends.
+  // We signal this back to handleWriteActions via lockReleased.
+  let lockReleased = false;
   if (lock) {
-    lock.releaseLock(); 
-    Logger.log('🔓 Lock released early - allowing next user while email sends...');
+    lock.releaseLock();
+    lockReleased = true;
+    Logger.log('🔓 Lock released early — allowing next user while email sends...');
   }
 
-  // 6. Send Email (Now running outside the lock)
   if (emailTriggerNeeded) {
-    Logger.log('🚨 ATTENDANCE TRUE - Preparing email...');
+    Logger.log('🚨 ATTENDANCE TRUE — Preparing email...');
     try {
-      // We pass the 'values' array which we updated in memory above
       sendCheckInNotification(sheet, rowIndex - 1, headers, values);
     } catch (e) {
       Logger.log('❌ Email Notification Failed: ' + e.toString());
     }
   }
 
-  return jsonResponse({
-    status: 'success',
-    message: 'Updated',
-    serverLastModified: now.getTime()
-  });
+  return {
+    response: jsonResponse({ status: 'success', message: 'Updated', serverLastModified: now.getTime() }),
+    lockReleased: lockReleased
+  };
 }
 
+// 2.3: All user-supplied values are wrapped in escapeHtml() before being
+// injected into the HTML email body.
 function sendCheckInNotification(sheet, rowIndex, headers, values) {
   try {
     const row = values[rowIndex];
     const colIndices = getColumnIndices(headers);
 
-    // Check attendance status
     const attendanceValue = row[colIndices.attendance];
     const isCheckedIn = String(attendanceValue).toUpperCase() === 'TRUE';
-
     if (!isCheckedIn) return;
 
-    // Check duplicates
     if (colIndices.emailSent !== undefined && row[colIndices.emailSent]) {
       Logger.log('[CHECK-IN EMAIL] ⚠️ Email already sent. Skipping.');
       return;
     }
 
-    // Extract Data
-    const firstName = row[colIndices.firstName] || '';
-    const lastName = row[colIndices.lastName] || '';
-    const fullName = (firstName + ' ' + lastName).trim();
-    const spocEmail = row[colIndices.spocEmail] || '';
-    const contact = row[colIndices.contact] || 'No Contact';
-    const company = row[colIndices.company] || 'Unknown Company';
-    const spocSlack = (colIndices.spocSlack !== undefined) ? (row[colIndices.spocSlack] || '') : '';
+    const firstName  = row[colIndices.firstName] || '';
+    const lastName   = row[colIndices.lastName] || '';
+    const fullName   = (firstName + ' ' + lastName).trim();
+    const spocEmail  = row[colIndices.spocEmail] || '';
+    const contact    = row[colIndices.contact] || 'No Contact';
+    const company    = row[colIndices.company] || 'Unknown Company';
+    const spocSlack  = (colIndices.spocSlack !== undefined) ? (row[colIndices.spocSlack] || '') : '';
 
     if (!spocEmail || !spocEmail.includes('@')) {
       Logger.log('[CHECK-IN EMAIL] ❌ Invalid SPOC email. Aborting.');
       return;
     }
 
-    // Combine Recipients (Email + Slack)
+    // 2.3: Escape all user-supplied data before injecting into HTML
+    const safeName    = escapeHtml(fullName);
+    const safeCompany = escapeHtml(company);
+    const safeContact = escapeHtml(contact);
+    const safeSheet   = escapeHtml(sheet.getName());
+
     let recipients = spocEmail;
     if (spocSlack && spocSlack.includes('@')) recipients += ',' + spocSlack;
 
-    // Format Time
     let timestamp = row[colIndices.timestamp] || new Date();
     const formattedTime = Utilities.formatDate(new Date(timestamp), Session.getScriptTimeZone(), 'MMM dd, yyyy HH:mm');
 
-    // Generate Summary List
     const checkInList = values.slice(1).filter(r => {
-      const rCheckedIn = String(r[colIndices.attendance]).toUpperCase() === 'TRUE';
-      return rCheckedIn && r[colIndices.spocEmail] === spocEmail;
+      return String(r[colIndices.attendance]).toUpperCase() === 'TRUE'
+        && r[colIndices.spocEmail] === spocEmail;
     }).map(r => {
-      const f = r[colIndices.firstName] || '';
-      const l = r[colIndices.lastName] || '';
-      const c = r[colIndices.company] || '';
-      const p = r[colIndices.contact] || '';
+      const f = escapeHtml(r[colIndices.firstName] || '');
+      const l = escapeHtml(r[colIndices.lastName] || '');
+      const c = escapeHtml(r[colIndices.company] || '');
+      const p = escapeHtml(r[colIndices.contact] || '');
       return `<li style="margin-bottom:6px;"><strong>${f} ${l}</strong> (${c}) — <a href="tel:${p}" style="color:#0066cc;">${p}</a></li>`;
     });
 
@@ -783,15 +616,14 @@ function sendCheckInNotification(sheet, rowIndex, headers, values) {
       ? `<ul style="padding-left:20px; margin-top:10px;">${checkInList.join('')}</ul>`
       : '<p style="margin-top:10px;"><em>None yet</em></p>';
 
-    // Send Email
     const htmlBody = `
       <html><body style="font-family:Arial,sans-serif; font-size:14px; color:#333; line-height:1.6;">
       <div style="background:#fff3cd; border-left:4px solid #ffc107; padding:12px; margin-bottom:20px;">
         <strong style="color:#856404; font-size:16px;">Attendee Check-in Alert</strong>
       </div>
-      <p><strong>${fullName}</strong> from <strong>${company}</strong> checked in at <strong>${sheet.getName()}</strong>.</p>
+      <p><strong>${safeName}</strong> from <strong>${safeCompany}</strong> checked in at <strong>${safeSheet}</strong>.</p>
       <table style="margin-bottom:20px;">
-        <tr><td style="font-weight:bold; width:120px;">Contact:</td><td><a href="tel:${contact}">${contact}</a></td></tr>
+        <tr><td style="font-weight:bold; width:120px;">Contact:</td><td><a href="tel:${safeContact}">${safeContact}</a></td></tr>
         <tr><td style="font-weight:bold;">Time:</td><td>${formattedTime}</td></tr>
       </table>
       <hr style="border:0; border-top:1px solid #ddd; margin:24px 0;">
@@ -799,9 +631,8 @@ function sendCheckInNotification(sheet, rowIndex, headers, values) {
       ${listHtml}
       </body></html>`;
 
-    GmailApp.sendEmail(recipients, `Check-in Alert: ${fullName} [${sheet.getName()}]`, '', { htmlBody: htmlBody, name: 'Event Check-in System' });
+    GmailApp.sendEmail(recipients, `Check-in Alert: ${safeName} [${safeSheet}]`, '', { htmlBody: htmlBody, name: 'Event Check-in System' });
 
-    // Mark as Sent
     if (colIndices.emailSent !== undefined) {
       sheet.getRange(rowIndex + 1, colIndices.emailSent + 1).setValue(new Date());
     }
@@ -813,125 +644,104 @@ function sendCheckInNotification(sheet, rowIndex, headers, values) {
   }
 }
 
+// ─── COLUMN UTILITIES ────────────────────────────────────────────────────────
+
+// 3.4: COLUMN_ALIASES config map + reverse lookup replaces the brittle else-if
+// chain. Adding a new alias is a one-line change in COLUMN_ALIASES.
+// First-match-wins prevents duplicate columns from overwriting earlier ones.
+const COLUMN_ALIASES = {
+  firstName:    ['first name', 'firstname'],
+  lastName:     ['last name', 'lastname'],
+  fullName:     ['full name', 'fullname'],
+  email:        ['email', 'e-mail'],
+  contact:      ['contact', 'phone', 'mobile'],
+  company:      ['company', 'organization'],
+  attendance:   ['attendance', 'status'],
+  timestamp:    ['check-in time', 'timestamp'],
+  lanyardColor: ['colour of the lanyard', 'lanyard color'],
+  spocName:     ['spoc of the day', 'spoc name'],
+  spocEmail:    ['spoc email', 'spoc_email'],
+  spocSlack:    ['spoc slack', 'spoc_slack'],
+  notes:        ['notes', 'note'],
+  leadIntel:    ['lead intel', 'intel'],
+  attendeeType: ['attendee type', 'type', 'category'],
+  emailSent:    ['email sent', 'notification sent']
+};
+
+// Build reverse lookup once at script load: lowercase alias → canonical name
+const _aliasReverseLookup = (function () {
+  const lookup = {};
+  Object.keys(COLUMN_ALIASES).forEach(function (canonical) {
+    COLUMN_ALIASES[canonical].forEach(function (alias) {
+      lookup[alias] = canonical;
+    });
+  });
+  return lookup;
+})();
+
 function getColumnIndices(headers) {
   const indices = {};
   headers.forEach(function (header, i) {
     if (!header) return;
     const h = header.toString().toLowerCase().trim();
-
-    if (['first name', 'firstname'].indexOf(h) > -1) indices.firstName = i;
-    else if (['last name', 'lastname'].indexOf(h) > -1) indices.lastName = i;
-    else if (['full name', 'fullname'].indexOf(h) > -1) indices.fullName = i;
-    else if (['email', 'e-mail'].indexOf(h) > -1) indices.email = i;
-    else if (['contact', 'phone', 'mobile'].indexOf(h) > -1) indices.contact = i;
-    else if (['company', 'organization'].indexOf(h) > -1) indices.company = i;
-    else if (['attendance', 'status'].indexOf(h) > -1) indices.attendance = i;
-    else if (['check-in time', 'timestamp'].indexOf(h) > -1) indices.timestamp = i;
-    else if (['colour of the lanyard', 'lanyard color'].indexOf(h) > -1) indices.lanyardColor = i;
-    else if (['spoc of the day', 'spoc name'].indexOf(h) > -1) indices.spocName = i;
-    else if (['spoc email', 'spoc_email'].indexOf(h) > -1) indices.spocEmail = i;
-    else if (['spoc slack', 'spoc_slack'].indexOf(h) > -1) indices.spocSlack = i;
-    else if (['notes', 'note'].indexOf(h) > -1) indices.notes = i;
-    else if (['lead intel', 'intel'].indexOf(h) > -1) indices.leadIntel = i;
-    else if (['attendee type', 'type', 'category'].indexOf(h) > -1) indices.attendeeType = i;
-    else if (['email sent', 'notification sent'].indexOf(h) > -1) indices.emailSent = i;
+    const canonical = _aliasReverseLookup[h];
+    if (canonical && indices[canonical] === undefined) {
+      indices[canonical] = i; // first match wins
+    }
   });
   return indices;
 }
 
-/**
- * ✅ TEST FUNCTION: Manually test email sending
- * IMPORTANT: Update TEST_SHEET_URL with your actual event sheet URL
- */
-function testEmailNotification() {
-  Logger.log('\n========== [TEST] EMAIL NOTIFICATION TEST ==========\n');
+// ─── VALIDATION & SECURITY ───────────────────────────────────────────────────
 
-  // ✅ CONFIGURE THIS: Replace with your actual event sheet URL
-  const TEST_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1gtZuWwqtI-oI3njQy5hKxmgIfcnyDiRM5FSOBiHeUeA/edit';
+// 2.2: Called at the top of handleWriteActions before the lock is acquired.
+function validatePayload(action, data) {
+  const errors = [];
 
-  try {
-    // Open by URL instead of getActiveSpreadsheet()
-    let ss;
-    try {
-      ss = SpreadsheetApp.openByUrl(TEST_SHEET_URL);
-    } catch (e) {
-      Logger.log('❌ Error: Could not open spreadsheet.');
-      Logger.log('   Please update TEST_SHEET_URL in the testEmailNotification() function.');
-      Logger.log('   Current URL: ' + TEST_SHEET_URL);
-      return;
-    }
+  const stringFields = ['email', 'firstName', 'lastName', 'fullName', 'company', 'contact', 'title', 'linkedin', 'notes', 'leadIntel'];
+  stringFields.forEach(function (f) {
+    if (data[f] && String(data[f]).length > 500) errors.push(f + ' exceeds 500 character limit');
+  });
 
-    // Get the event sheet by name (not Master Event Log)
-    const sheet = ss.getSheetByName('San Jose Dec25'); // ✅ Change to your event name
-
-    if (!sheet) {
-      Logger.log('❌ Sheet not found. Available sheets:');
-      ss.getSheets().forEach(function (s) {
-        Logger.log('  - ' + s.getName());
-      });
-      Logger.log('\n📝 Update the sheet name in testEmailNotification() function');
-      return;
-    }
-
-    const values = sheet.getDataRange().getValues();
-    const headers = values[0];
-
-    Logger.log('Using sheet: ' + sheet.getName());
-    Logger.log('Total rows: ' + values.length);
-    Logger.log('Headers: ' + headers.join(' | '));
-
-    // Get column indices
-    let colIndices;
-    try {
-      colIndices = getColumnIndices(headers);
-    } catch (indexError) {
-      Logger.log('❌ Column Error: ' + indexError.message);
-      Logger.log('\n📋 Available columns:');
-      headers.forEach(function (h, i) {
-        Logger.log('  ' + (i + 1) + '. ' + h);
-      });
-      return;
-    }
-
-    Logger.log('\nSearching for checked-in attendees...');
-
-    // Find first row where attendance = true
-    let foundRow = -1;
-    for (let i = 1; i < values.length; i++) {
-      const attendanceValue = values[i][colIndices.attendance];
-      const isCheckedIn = attendanceValue === true || String(attendanceValue).toUpperCase() === 'TRUE';
-
-      if (isCheckedIn) {
-        foundRow = i;
-        const name = values[i][colIndices.firstName] + ' ' + values[i][colIndices.lastName];
-        Logger.log('✅ Found checked-in attendee at row ' + (i + 1) + ': ' + name);
-        break;
-      }
-    }
-
-    if (foundRow === -1) {
-      Logger.log('❌ No checked-in attendees found.');
-      Logger.log('\n📝 Action Required:');
-      Logger.log('   1. Open your spreadsheet: ' + TEST_SHEET_URL);
-      Logger.log('   2. Go to sheet: ' + sheet.getName());
-      Logger.log('   3. Find the Attendance column');
-      Logger.log('   4. Set at least one row to TRUE');
-      Logger.log('   5. Run this test again');
-      return;
-    }
-
-    // Send test email
-    Logger.log('\n📧 Sending test email notification...');
-    sendCheckInNotification(sheet, foundRow, headers, values);
-
-    Logger.log('\n========== [TEST] COMPLETED SUCCESSFULLY ==========\n');
-
-  } catch (error) {
-    Logger.log('❌ TEST ERROR: ' + error.toString());
-    Logger.log('Stack: ' + error.stack);
+  if (action === 'add') {
+    if (!data.email || !data.fullName) errors.push('email and fullName are required');
+    if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) errors.push('Invalid email format');
+    if (data.contact && !/^\+?[0-9\s\-().]{7,20}$/.test(data.contact)) errors.push('Invalid phone format');
   }
+
+  if (action === 'update') {
+    if (!data.email) errors.push('email is required for update');
+    if (data.lanyardColor && String(data.lanyardColor).length > 50) errors.push('lanyardColor too long');
+  }
+
+  if (action === 'update_event') {
+    if (!data.eventId) errors.push('eventId is required');
+    if (data.state && ['Active', 'Archived', 'Deleted'].indexOf(data.state) === -1) {
+      errors.push('Invalid state. Must be: Active, Archived, or Deleted');
+    }
+  }
+
+  if (action === 'log_event') {
+    if (!data.eventId || !data.eventName || !data.sheetUrl) {
+      errors.push('eventId, eventName, and sheetUrl are required');
+    }
+  }
+
+  return errors;
 }
 
+// 2.3: Prevents HTML injection in email bodies.
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// ─── UTILITIES ───────────────────────────────────────────────────────────────
 
 function jsonResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
@@ -941,4 +751,62 @@ function camelize(str) {
   return str.replace(/(?:^\w|[A-Z]|\b\w)/g, function (word, index) {
     return index === 0 ? word.toLowerCase() : word.toUpperCase();
   }).replace(/\s+/g, '');
+}
+
+/**
+ * TEST FUNCTION: Manually test email sending from the GAS editor.
+ * Update TEST_SHEET_URL and the sheet name before running.
+ */
+function testEmailNotification() {
+  Logger.log('\n========== [TEST] EMAIL NOTIFICATION TEST ==========\n');
+  const TEST_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1gtZuWwqtI-oI3njQy5hKxmgIfcnyDiRM5FSOBiHeUeA/edit';
+
+  try {
+    let ss;
+    try {
+      ss = SpreadsheetApp.openByUrl(TEST_SHEET_URL);
+    } catch (e) {
+      Logger.log('❌ Error: Could not open spreadsheet. Update TEST_SHEET_URL.');
+      return;
+    }
+
+    const sheet = ss.getSheetByName('San Jose Dec25'); // ← change to your event name
+
+    if (!sheet) {
+      Logger.log('❌ Sheet not found. Available sheets:');
+      ss.getSheets().forEach(function (s) { Logger.log('  - ' + s.getName()); });
+      return;
+    }
+
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0];
+    const colIndices = getColumnIndices(headers);
+
+    Logger.log('Using sheet: ' + sheet.getName());
+    Logger.log('Total rows: ' + values.length);
+    Logger.log('Headers: ' + headers.join(' | '));
+
+    let foundRow = -1;
+    for (let i = 1; i < values.length; i++) {
+      const attendanceValue = values[i][colIndices.attendance];
+      if (attendanceValue === true || String(attendanceValue).toUpperCase() === 'TRUE') {
+        foundRow = i;
+        Logger.log('✅ Found checked-in attendee at row ' + (i + 1));
+        break;
+      }
+    }
+
+    if (foundRow === -1) {
+      Logger.log('❌ No checked-in attendees found. Set at least one Attendance cell to TRUE and retry.');
+      return;
+    }
+
+    Logger.log('\n📧 Sending test email...');
+    sendCheckInNotification(sheet, foundRow, headers, values);
+    Logger.log('\n========== [TEST] COMPLETED SUCCESSFULLY ==========\n');
+
+  } catch (error) {
+    Logger.log('❌ TEST ERROR: ' + error.toString());
+    Logger.log('Stack: ' + error.stack);
+  }
 }
