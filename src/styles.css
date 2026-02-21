@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Explicitly tell Tailwind v4 where to scan for utility class names.
+   Automatic content detection doesn't reliably traverse inline Angular
+   templates (.ts files) when running through @tailwindcss/postcss in
+   Angular's Vite-based dev server. */
+@source "./**/*.ts";
+@source "./**/*.html";
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f3f4f6;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar        { width: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background-color: #cbd5e1; border-radius: 20px; }

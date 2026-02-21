@@ -444,6 +444,43 @@ function addWalkIn(sheet, data) {
     // sendCheckInNotification expects a 0-based index into allValues, so we pass targetRow - 1.
     const targetRow = lastRowIndex + 1;
     sheet.getRange(targetRow, 1, 1, newRow.length).setValues([newRow]);
+
+    // ── SPOC LOOKUP FORMULA ──────────────────────────────────────────────────
+    // If there are existing data rows, replace the literal default SPOC values
+    // with INDEX/MATCH formulas that look up the walk-in's company in all rows
+    // above the new row. If the company already exists, its SPOC is used;
+    // otherwise the formula falls back to the hardcoded default SPOC.
+    //
+    // Range intentionally excludes the new row itself (rows 2 → lastRowIndex)
+    // to avoid a circular reference and to ensure we only match existing attendees.
+    if (lastRowIndex > 1) {
+      const companyColIdx  = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'company' || hn === 'organization'; });
+      const spocNameColIdx = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc of the day' || hn === 'spoc name'; });
+      const spocEmailColIdx= headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc email' || hn === 'spoc_email'; });
+      const spocSlackColIdx= headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc slack' || hn === 'spoc_slack'; });
+
+      if (companyColIdx > -1) {
+        const companyCol  = colToLetter(companyColIdx + 1);
+        const searchRange = companyCol + '$2:' + companyCol + lastRowIndex; // existing rows only
+
+        function spocFormula(valueColIdx, defaultVal) {
+          if (valueColIdx === -1) return null;
+          const valueCol = colToLetter(valueColIdx + 1);
+          const lookupRange = valueCol + '$2:' + valueCol + lastRowIndex;
+          const safe = (defaultVal || '').replace(/"/g, '""'); // escape embedded quotes
+          return '=IFERROR(INDEX(' + lookupRange + ',MATCH(' + companyCol + targetRow + ',' + searchRange + ',0)),"' + safe + '")';
+        }
+
+        const nameFormula  = spocFormula(spocNameColIdx,  data.defaultSpocName);
+        const emailFormula = spocFormula(spocEmailColIdx, data.defaultSpocEmail);
+        const slackFormula = spocFormula(spocSlackColIdx, data.defaultSpocSlack);
+
+        if (nameFormula  && spocNameColIdx  > -1) sheet.getRange(targetRow, spocNameColIdx  + 1).setFormula(nameFormula);
+        if (emailFormula && spocEmailColIdx > -1) sheet.getRange(targetRow, spocEmailColIdx + 1).setFormula(emailFormula);
+        if (slackFormula && spocSlackColIdx > -1) sheet.getRange(targetRow, spocSlackColIdx + 1).setFormula(slackFormula);
+      }
+    }
+
     SpreadsheetApp.flush();
 
     if (autoCheckIn) {
@@ -742,6 +779,20 @@ function escapeHtml(str) {
 }
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
+
+/**
+ * Converts a 1-based column number to an A1-notation column letter.
+ * e.g. 1→A, 26→Z, 27→AA
+ */
+function colToLetter(col) {
+  let letter = '';
+  while (col > 0) {
+    col--;
+    letter = String.fromCharCode(65 + (col % 26)) + letter;
+    col = Math.floor(col / 26);
+  }
+  return letter;
+}
 
 function jsonResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);

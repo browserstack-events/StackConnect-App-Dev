@@ -120,10 +120,6 @@ import { Router } from '@angular/router';
               </div>
             </div>
 
-            <p class="text-xs text-gray-400 mb-6">
-              ℹ️ Your check-in has been recorded and a confirmation email is on its way.
-            </p>
-
             <button
               (click)="reset()"
               class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium transition"
