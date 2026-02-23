@@ -549,7 +549,9 @@ export class DataService {
   }
 
   private parseJsonData(rows: any[]) {
-    const parsedData: Attendee[] = rows.map(row => {
+    const parsedData: Attendee[] = rows
+    .filter(row => Object.keys(row).some(k => k.toLowerCase() === 'email' && String(row[k] || '').trim() !== ''))
+    .map(row => {
       // Case-insensitive field lookup across all candidate key names.
       // The backend now sends camelCase keys only; the fallback to raw header
       // names covers any older cached/legacy data that may still have both styles.

@@ -380,13 +380,24 @@ function readData(sheet) {
   const headers = data[0];
   const rows = data.slice(1);
 
-  const attendees = rows.map(row => {
-    const obj = {};
-    headers.forEach((h, i) => {
-      obj[camelize(h.toString())] = row[i]; // camelCase key only
-    });
-    return obj;
+  // Skip rows with no email — they are blank/template rows and would appear as
+  // "Unknown Attendee" on the frontend. Filtering here keeps the payload small.
+  const emailColIdx = headers.findIndex(function (h) {
+    return ['email', 'e-mail'].indexOf(h.toString().toLowerCase().trim()) !== -1;
   });
+
+  const attendees = rows
+    .filter(function (row) {
+      if (emailColIdx === -1) return true; // no email column → include all
+      return String(row[emailColIdx] || '').trim() !== '';
+    })
+    .map(function (row) {
+      const obj = {};
+      headers.forEach((h, i) => {
+        obj[camelize(h.toString())] = row[i]; // camelCase key only
+      });
+      return obj;
+    });
 
   return jsonResponse({
     status: 'success',
