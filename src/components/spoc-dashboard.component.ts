@@ -492,42 +492,6 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
           (close)="closeDetail()" />
       }
 
-      <!-- Walk-in Modal -->
-      @if (isWalkInOpen()) {
-        <div class="relative z-50" role="dialog" aria-modal="true">
-          <div class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm"></div>
-          <div class="fixed inset-0 z-10 w-screen overflow-y-auto">
-            <div class="flex min-h-full items-center justify-center p-4">
-              <div class="relative transform overflow-hidden rounded-lg bg-white shadow-xl transition-all sm:w-full sm:max-w-lg">
-                <div class="bg-white px-4 pb-4 pt-5 sm:p-6 sm:pb-4">
-                  <h3 class="text-lg font-semibold leading-6 text-gray-900 mb-4">Add Walk-in Attendee</h3>
-
-                  @if (walkInError()) {
-                    <div class="mb-4 bg-red-50 border-l-4 border-red-400 p-3 rounded text-sm text-red-700">
-                      {{ walkInError() }}
-                    </div>
-                  }
-
-                  <div class="space-y-3">
-                    <input type="text"  [(ngModel)]="walkInForm.fullName" placeholder="Full Name *"       (input)="walkInError.set('')" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border focus:ring-1 focus:ring-teal-500">
-                    <input type="email" [(ngModel)]="walkInForm.email"    placeholder="Corporate Email *" (input)="walkInError.set('')" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border focus:ring-1 focus:ring-teal-500">
-                    <input type="text"  [(ngModel)]="walkInForm.company"  placeholder="Company *"         (input)="walkInError.set('')" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border focus:ring-1 focus:ring-teal-500">
-                    <input type="tel"   [(ngModel)]="walkInForm.contact"  placeholder="Phone with country code (e.g. +1 ...)" (input)="walkInError.set('')" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border focus:ring-1 focus:ring-teal-500">
-                  </div>
-                </div>
-                <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
-                  <button (click)="submitWalkIn()"
-                          [disabled]="isAddingWalkIn() || !walkInForm.fullName || !walkInForm.email || !walkInForm.company"
-                          class="inline-flex w-full justify-center rounded-md px-3 py-2 text-sm font-semibold text-white shadow-sm sm:ml-3 sm:w-auto disabled:opacity-50 bg-teal-600 hover:bg-teal-500">
-                    {{ isAddingWalkIn() ? 'Adding...' : 'Add Attendee' }}
-                  </button>
-                  <button (click)="closeWalkIn()" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto">Cancel</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      }
     </div>
   `
 })
@@ -549,11 +513,6 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
 
   selectedAttendee = signal<Attendee | null>(null);
 
-  // Walk-in State
-  isWalkInOpen   = signal(false);
-  isAddingWalkIn = signal(false);
-  walkInError    = signal('');
-  walkInForm = { fullName: '', email: '', company: '', contact: '' };
 
   allAttendees = this.dataService.getAttendees();
 
@@ -771,48 +730,8 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   }
 
   openWalkIn() {
-    this.walkInForm = { fullName: '', email: '', company: '', contact: '' };
-    this.walkInError.set('');
-    this.isWalkInOpen.set(true);
-  }
-
-  closeWalkIn() {
-    this.walkInError.set('');
-    this.isWalkInOpen.set(false);
-  }
-
-  async submitWalkIn() {
-    this.walkInError.set('');
-
-    // Shared validation — same rules as the public walk-in form
-    const validationError = validateWalkInData({
-      fullName: this.walkInForm.fullName,
-      email:    this.walkInForm.email,
-      company:  this.walkInForm.company,
-      contact:  this.walkInForm.contact || undefined
-    });
-
-    if (validationError) {
-      this.walkInError.set(validationError);
-      return;
-    }
-
-    this.isAddingWalkIn.set(true);
-    const event = this.dataService.getEventById(this.eventId());
-    if (event) {
-      await this.dataService.addWalkInAttendee(
-        this.walkInForm,
-        event.sheetUrl,
-        {
-          name:  event.defaultSpocName  || '',
-          email: event.defaultSpocEmail || '',
-          slack: event.defaultSpocSlack || ''
-        },
-        false // autoCheckIn: false — admin controls check-in manually via the toggle
-      );
-    }
-    this.isAddingWalkIn.set(false);
-    this.closeWalkIn();
+    const base = window.location.href.split('#')[0];
+    window.open(base + '#/register/' + this.eventId(), '_blank');
   }
 
   getLanyardHex(color: string): string {
