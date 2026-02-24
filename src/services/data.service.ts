@@ -1,4 +1,5 @@
 import { Injectable, signal } from '@angular/core';
+import { environment } from '../environments/environment';
 import { STORAGE_KEYS, SYNC_CONFIG, VALIDATION, DEFAULT_LANYARD_COLOR } from '../constants';
 
 export type AttendeeType = 'Attendee' | 'Speaker' | 'Round Table';
@@ -86,14 +87,8 @@ export class DataService {
   public availableSheets = signal<string[]>([]);
   public savedEvents     = signal<SavedEvent[]>([]);
 
-  /**
-   * GAS endpoint URL — read from the VITE_GAS_URL environment variable at
-   * Angular's esbuild builder does not inject VITE_* env vars automatically,
-   * so the URL is hardcoded here. Replace with your own GAS deployment URL
-   * if you redeploy the backend.
-   */
-  private readonly SCRIPT_URL =
-    'https://script.google.com/a/macros/browserstack.com/s/AKfycbyQRX7qS5cpjZmQCEAmDLy9SW5xKvdeK59IfQ8AnshFLbfaeFCppaTXlT3M3aRbRKJJ/exec';
+  /** GAS endpoint — injected from environment file (swapped at build time in CI). */
+  private readonly SCRIPT_URL = environment.gasUrl;
 
   private currentSheetUrl = signal('');
 

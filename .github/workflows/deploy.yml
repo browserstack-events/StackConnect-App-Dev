@@ -29,8 +29,11 @@ jobs:
       - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
+      - name: Inject GAS URL
+        run: sed -i "s|GAS_URL_PLACEHOLDER|${{ secrets.GAS_URL }}|g" src/environments/environment.prod.ts
+
       - name: Build
-        run: npm run build -- --base-href /Sales-SPOC-Dashboard/
+        run: npm run build -- --base-href /StackConnect-App/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
