@@ -439,6 +439,7 @@ function addWalkIn(sheet, data) {
       else if (h === 'designation' || h === 'title') val = data.title || '';
       else if (h === 'linkedin') val = data.linkedin || '';
       else if (h === 'colour of the lanyard' || h === 'lanyard color') val = data.lanyardColor || 'Yellow';
+      else if (h === 'colour of name card' || h === 'name card color' || h === 'namecard color') val = data.nameCardColor || '';
       else if (h === 'segment') val = 'Walk-in';
       else if (h === 'attendance') val = autoCheckIn ? true : false;
       else if (h === 'check-in time') val = autoCheckIn ? new Date() : '';
@@ -561,7 +562,8 @@ function updateAttendee(sheet, data, lock) {
 
     let colIndex = -1;
     if (key === 'attendance') colIndex = indices.attendance;
-    else if (key === 'lanyardColor') colIndex = indices.lanyardColor;
+    else if (key === 'lanyardColor')  colIndex = indices.lanyardColor;
+    else if (key === 'nameCardColor') colIndex = indices.nameCardColor;
     else if (key === 'notes') colIndex = indices.notes;
     else if (key === 'leadIntel') colIndex = indices.leadIntel;
     else if (key === 'attendeeType') colIndex = indices.attendeeType;
@@ -706,7 +708,8 @@ const COLUMN_ALIASES = {
   company:      ['company', 'organization'],
   attendance:   ['attendance', 'status'],
   timestamp:    ['check-in time', 'timestamp'],
-  lanyardColor: ['colour of the lanyard', 'lanyard color'],
+  lanyardColor:   ['colour of the lanyard', 'lanyard color'],
+  nameCardColor:  ['colour of name card', 'name card color', 'namecard color'],
   spocName:     ['spoc of the day', 'spoc name'],
   spocEmail:    ['spoc email', 'spoc_email'],
   spocSlack:    ['spoc slack', 'spoc_slack'],

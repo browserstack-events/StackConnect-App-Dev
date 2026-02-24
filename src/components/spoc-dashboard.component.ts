@@ -307,11 +307,33 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                       }
 
                       <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="flex items-center text-sm text-gray-900 font-medium">
-                          <span class="w-3 h-3 rounded-full mr-2 ring-1 ring-inset ring-black/10" 
-                                [style.background-color]="getLanyardHex(attendee.lanyardColor)"></span>
-                          {{ attendee.lanyardColor }}
-                        </div>
+                        @if (attendee.nameCardColor) {
+                          <!-- Split pill: ● lanyard bead | ■ name card -->
+                          <span class="inline-flex items-stretch rounded-full border border-gray-200 text-[11px] font-semibold overflow-hidden">
+                            <span class="flex items-center gap-1 px-2 py-0.5"
+                                  [style.background-color]="getLanyardHex(attendee.lanyardColor) + '20'"
+                                  [style.color]="getLanyardHex(attendee.lanyardColor)">
+                              <span class="w-2.5 h-2.5 rounded-full ring-1 ring-inset ring-black/10 flex-shrink-0"
+                                    [style.background-color]="getLanyardHex(attendee.lanyardColor)"></span>
+                              {{ attendee.lanyardColor }}
+                            </span>
+                            <span class="w-px bg-gray-200 flex-shrink-0"></span>
+                            <span class="flex items-center gap-1 px-2 py-0.5"
+                                  [style.background-color]="getLanyardHex(attendee.nameCardColor) + '20'"
+                                  [style.color]="getLanyardHex(attendee.nameCardColor)">
+                              <span class="w-2.5 h-2.5 rounded-none ring-1 ring-inset ring-black/10 flex-shrink-0"
+                                    [style.background-color]="getLanyardHex(attendee.nameCardColor)"></span>
+                              CARD {{ attendee.nameCardColor }}
+                            </span>
+                          </span>
+                        } @else {
+                          <!-- Original single-color display -->
+                          <div class="flex items-center text-sm text-gray-900 font-medium">
+                            <span class="w-3 h-3 rounded-full mr-2 ring-1 ring-inset ring-black/10"
+                                  [style.background-color]="getLanyardHex(attendee.lanyardColor)"></span>
+                            {{ attendee.lanyardColor }}
+                          </div>
+                        }
                         @if (attendee.printStatus && mode() === 'admin') {
                           <div class="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full w-fit"
                                [class]="attendee.printStatus === 'Not Printed' ? 'text-red-700 bg-red-50' : 'text-purple-700 bg-purple-50'">
@@ -411,14 +433,38 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                           
                           <div class="flex flex-wrap gap-2 mt-0.5">
                           
-                            <span class="text-[10px] font-bold rounded px-2 py-0.5 flex items-center gap-1.5 border"
-                                  [style.background-color]="getLanyardHex(attendee.lanyardColor) + '20'"
-                                  [style.color]="getLanyardHex(attendee.lanyardColor)"
-                                  [style.border-color]="getLanyardHex(attendee.lanyardColor) + '40'">
-                              <span class="w-2 h-2 rounded-full ring-1 ring-inset ring-black/10" 
-                                    [style.background-color]="getLanyardHex(attendee.lanyardColor)"></span>
-                              {{ attendee.lanyardColor }}
-                            </span>
+                            @if (attendee.nameCardColor) {
+                              <!-- Split pill: ● lanyard bead | ■ name card -->
+                              <span class="inline-flex items-stretch rounded-full text-[10px] font-bold overflow-hidden border"
+                                    [style.border-color]="getLanyardHex(attendee.lanyardColor) + '40'">
+                                <span class="flex items-center gap-1 px-2 py-0.5"
+                                      [style.background-color]="getLanyardHex(attendee.lanyardColor) + '20'"
+                                      [style.color]="getLanyardHex(attendee.lanyardColor)">
+                                  <span class="w-2 h-2 rounded-full ring-1 ring-inset ring-black/10"
+                                        [style.background-color]="getLanyardHex(attendee.lanyardColor)"></span>
+                                  {{ attendee.lanyardColor }}
+                                </span>
+                                <span class="w-px flex-shrink-0"
+                                      [style.background-color]="getLanyardHex(attendee.lanyardColor) + '40'"></span>
+                                <span class="flex items-center gap-1 px-2 py-0.5"
+                                      [style.background-color]="getLanyardHex(attendee.nameCardColor) + '20'"
+                                      [style.color]="getLanyardHex(attendee.nameCardColor)">
+                                  <span class="w-2 h-2 rounded-none ring-1 ring-inset ring-black/10 flex-shrink-0"
+                                        [style.background-color]="getLanyardHex(attendee.nameCardColor)"></span>
+                                  CARD {{ attendee.nameCardColor }}
+                                </span>
+                              </span>
+                            } @else {
+                              <!-- Original single-color tag -->
+                              <span class="text-[10px] font-bold rounded px-2 py-0.5 flex items-center gap-1.5 border"
+                                    [style.background-color]="getLanyardHex(attendee.lanyardColor) + '20'"
+                                    [style.color]="getLanyardHex(attendee.lanyardColor)"
+                                    [style.border-color]="getLanyardHex(attendee.lanyardColor) + '40'">
+                                <span class="w-2 h-2 rounded-full ring-1 ring-inset ring-black/10"
+                                      [style.background-color]="getLanyardHex(attendee.lanyardColor)"></span>
+                                {{ attendee.lanyardColor }}
+                              </span>
+                            }
                             
                   
                             @if (mode() === 'admin' && attendee.printStatus) {

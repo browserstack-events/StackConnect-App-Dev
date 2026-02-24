@@ -13,6 +13,7 @@ export interface Attendee {
   company: string;
   segment: string;
   lanyardColor: string;
+  nameCardColor: string;
   attendance: boolean;
   spocName: string;
   spocEmail: string;
@@ -375,11 +376,12 @@ export class DataService {
       spocName:     defaultSpocValues?.name  || 'Walk-in',
       spocEmail:    defaultSpocValues?.email || '',
       spocSlack:    defaultSpocValues?.slack || '',
-      lanyardColor: DEFAULT_LANYARD_COLOR,
-      printStatus:  '',
-      leadIntel:    '',
-      notes:        '',
-      attendeeType: 'Attendee'
+      lanyardColor:  DEFAULT_LANYARD_COLOR,
+      nameCardColor: '',
+      printStatus:   '',
+      leadIntel:     '',
+      notes:         '',
+      attendeeType:  'Attendee'
     };
 
     if (this.currentSheetUrl() === sheet) {
@@ -640,7 +642,8 @@ export class DataService {
         contact:      this.cleanString(get('contact', 'Contact', 'Phone', 'Mobile')),
         company:      this.cleanString(get('company', 'Company', 'Organization')),
         segment:      this.cleanString(get('segment', 'Segment', 'Industry')),
-        lanyardColor: this.cleanString(get('lanyardColor', 'Colour of the Lanyard', 'Color of the Lanyard', 'Lanyard', 'Lanyard Color')),
+        lanyardColor:   this.cleanString(get('lanyardColor', 'Colour of the Lanyard', 'Color of the Lanyard', 'Lanyard', 'Lanyard Color')),
+      nameCardColor:  this.cleanString(get('nameCardColor', 'Colour of Name Card', 'Name Card Color', 'namecard color', 'Name Card')),
         attendance:   attendanceBool,
         spocName:     spocVal,
         spocEmail:    this.cleanString(get('spocEmail', 'SPoC email', 'spoc_email')),

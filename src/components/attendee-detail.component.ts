@@ -112,16 +112,16 @@ import { DummyAuthService } from '../services/dummy-auth.service';
               </div>
 
               <!-- Key Intel Grid -->
-              <div class="grid grid-cols-2 gap-4">
+              <div class="grid grid-cols-3 gap-3">
                 <div class="bg-gray-50 p-3 rounded-lg">
                   <span class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Lanyard</span>
-                  
+
                   @if (isAdmin()) {
-                     <select 
-                       [ngModel]="attendee().lanyardColor" 
+                     <select
+                       [ngModel]="attendee().lanyardColor"
                        (ngModelChange)="updateLanyard.emit($event)"
                        [disabled]="isEditingNote()"
-                       class="mt-1 block w-full rounded-md border border-gray-300 bg-white py-2 px-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 disabled:opacity-50">
+                       class="mt-1 block w-full rounded-md border border-gray-300 bg-white py-1.5 px-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 disabled:opacity-50">
                        <option [ngValue]="''">Select Color</option>
                        @for(color of availableColors(); track color) {
                          <option [value]="color">{{color}}</option>
@@ -129,13 +129,28 @@ import { DummyAuthService } from '../services/dummy-auth.service';
                      </select>
                   } @else {
                     <span class="block mt-1 text-sm font-semibold text-gray-900 flex items-center gap-2">
-                      <span class="w-2 h-2 rounded-full ring-1 ring-inset ring-black/10" 
+                      <!-- round dot = lanyard bead -->
+                      <span class="w-2.5 h-2.5 rounded-full ring-1 ring-inset ring-black/10 flex-shrink-0"
                             [style.background-color]="getLanyardHex(attendee().lanyardColor)"></span>
                       {{ attendee().lanyardColor || 'N/A' }}
                     </span>
                   }
                 </div>
-                
+
+                <div class="bg-gray-50 p-3 rounded-lg">
+                  <span class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Name Card</span>
+                  <span class="block mt-1 text-sm font-semibold text-gray-900 flex items-center gap-2">
+                    @if (attendee().nameCardColor) {
+                      <!-- square dot = card shape -->
+                      <span class="w-2.5 h-2.5 rounded-none ring-1 ring-inset ring-black/10 flex-shrink-0"
+                            [style.background-color]="getLanyardHex(attendee().nameCardColor)"></span>
+                      CARD {{ attendee().nameCardColor }}
+                    } @else {
+                      <span class="text-gray-400 italic">—</span>
+                    }
+                  </span>
+                </div>
+
                 <div class="bg-gray-50 p-3 rounded-lg">
                    <span class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Segment</span>
                    <span class="block mt-1 text-sm font-semibold text-gray-900">{{ attendee().segment || 'General' }}</span>
