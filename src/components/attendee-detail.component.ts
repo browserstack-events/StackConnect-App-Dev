@@ -128,9 +128,10 @@ import { DummyAuthService } from '../services/dummy-auth.service';
                        }
                      </select>
                   } @else {
-                    <span class="block mt-1 text-sm font-semibold text-gray-900 flex items-center gap-2">
-                      <!-- round dot = lanyard bead -->
-                      <span class="w-2.5 h-2.5 rounded-full ring-1 ring-inset ring-black/10 flex-shrink-0"
+                    <span class="inline-flex items-center gap-1 mt-1 px-2 py-1 rounded-full text-xs font-bold"
+                          [style.background-color]="getLanyardHex(attendee().lanyardColor) + '22'"
+                          [style.color]="getLanyardHex(attendee().lanyardColor)">
+                      <span class="w-2 h-2 rounded-full flex-shrink-0"
                             [style.background-color]="getLanyardHex(attendee().lanyardColor)"></span>
                       {{ attendee().lanyardColor || 'N/A' }}
                     </span>
@@ -139,16 +140,19 @@ import { DummyAuthService } from '../services/dummy-auth.service';
 
                 <div class="bg-gray-50 p-3 rounded-lg">
                   <span class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Name Card</span>
-                  <span class="block mt-1 text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <div class="mt-1">
                     @if (attendee().nameCardColor) {
-                      <!-- square dot = card shape -->
-                      <span class="w-2.5 h-2.5 rounded-none ring-1 ring-inset ring-black/10 flex-shrink-0"
-                            [style.background-color]="getLanyardHex(attendee().nameCardColor)"></span>
-                      CARD {{ attendee().nameCardColor }}
+                      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-bold"
+                            [style.background-color]="getLanyardHex(attendee().nameCardColor) + '22'"
+                            [style.color]="getLanyardHex(attendee().nameCardColor)">
+                        <span class="w-2 h-2 rounded-none flex-shrink-0"
+                              [style.background-color]="getLanyardHex(attendee().nameCardColor)"></span>
+                        {{ attendee().nameCardColor }}
+                      </span>
                     } @else {
-                      <span class="text-gray-400 italic">—</span>
+                      <span class="text-gray-400 italic text-sm">—</span>
                     }
-                  </span>
+                  </div>
                 </div>
 
                 <div class="bg-gray-50 p-3 rounded-lg">
@@ -210,7 +214,7 @@ import { DummyAuthService } from '../services/dummy-auth.service';
                   <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">Talking Points / Intel</h4>
                   <div class="bg-yellow-50 text-yellow-800 text-sm p-3 rounded-md border border-yellow-100">
                     @if (attendee().leadIntel) {
-                      <p class="whitespace-pre-line">{{ attendee().leadIntel }}</p>
+                      <p [innerHTML]="renderMarkdown(attendee().leadIntel)"></p>
                     } @else {
                       <p class="italic text-gray-500">No specific intel available.</p>
                     }
@@ -336,6 +340,19 @@ export class AttendeeDetailComponent {
   //Notes Management
   isAddingNote = signal(false);
   newNoteText = signal('');
+
+  renderMarkdown(text: string): string {
+    if (!text) return '';
+    return text
+      // Escape HTML entities first to prevent injection
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      // Bold: **text**
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      // Italic: *text* (single asterisk)
+      .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>')
+      // Line breaks
+      .replace(/\n/g, '<br>');
+  }
 
   getLanyardHex(color: string | undefined): string {
     const c = color?.toLowerCase() || '';
