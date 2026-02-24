@@ -30,7 +30,17 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Inject GAS URL
-        run: sed -i "s|GAS_URL_PLACEHOLDER|${{ secrets.GAS_URL }}|g" src/environments/environment.prod.ts
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+        run: sed -i "s|GAS_URL_PLACEHOLDER|${GAS_URL}|g" src/environments/environment.prod.ts
+
+      - name: Verify GAS URL injection
+        run: |
+          if grep -q "GAS_URL_PLACEHOLDER" src/environments/environment.prod.ts; then
+            echo "ERROR: GAS_URL secret was not injected. Add GAS_URL to the github-pages environment secrets."
+            exit 1
+          fi
+          echo "GAS URL injected successfully."
 
       - name: Build
         run: npm run build -- --base-href /StackConnect-App/
