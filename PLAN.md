@@ -16,7 +16,7 @@
 
 **Fix:** The Optimised Code base already has single copies of each. When we uncomment it, duplicates are gone. We will verify each function exists exactly once.
 
-**Status:** The original audit commit applied this fix, but the backend was reverted to v9 (the last stable working version) when the new Code.gs failed in production. v9 still contains the duplicates.
+**Status:** Applied in `Code.gs` v10. Each function exists exactly once; `// 1.1: Single authoritative copy (duplicate removed)` comments mark the canonical copies.
 
 ---
 
@@ -45,7 +45,7 @@ finally {
 
 Since `updateAttendee` needs to signal back that it released the lock, we'll refactor `handleWriteActions` so that `updateAttendee` returns a result object `{ response, lockReleased }`. The `finally` block checks this flag.
 
-**Status:** Same as 1.1 — applied in audit commit, then reverted with the backend.
+**Status:** Applied in `Code.gs` v10. `updateAttendee` returns `{ response, lockReleased }` and releases the lock early before sending email. The `finally` block in `handleWriteActions` checks the `lockReleased` flag before calling `lock.releaseLock()` again.
 
 ---
 
@@ -128,7 +128,7 @@ if (validationErrors.length > 0) {
 }
 ```
 
-**Status:** Reverted with backend. Not in current v9.
+**Status:** Applied in `Code.gs` v10. `validatePayload()` is called at the top of `handleWriteActions` before the lock is acquired.
 
 ---
 
@@ -150,7 +150,7 @@ function escapeHtml(str) {
 }
 ```
 
-**Status:** Reverted with backend. Not in current v9.
+**Status:** Applied in `Code.gs` v10. `escapeHtml()` helper added; all user-supplied values in `sendCheckInNotification` are wrapped with it.
 
 ---
 
@@ -177,7 +177,7 @@ function checkRateLimit(action) {
 
 Called at the top of `handleWriteActions`, BEFORE acquiring the lock.
 
-**Status:** Reverted with backend. Not in current v9.
+**Status:** Not implemented. No `checkRateLimit` function exists in `Code.gs` v10.
 
 ---
 
@@ -201,7 +201,7 @@ headers.forEach((h, i) => {
 });
 ```
 
-**Status:** Not in current v9.
+**Status:** Applied in `Code.gs` v10. `readData()` emits camelCase keys only.
 
 ---
 
@@ -220,7 +220,7 @@ function getMasterColumnMap(masterSheet) {
 }
 ```
 
-**Status:** Not in current v9.
+**Status:** Applied in `Code.gs` v10. `getMasterColumnMap()` is used in `getAllEventsFromMaster`, `updateEventInMaster`, and `getEventFromMaster`.
 
 ---
 
@@ -230,7 +230,7 @@ function getMasterColumnMap(masterSheet) {
 
 **Fix:** Replace with a `COLUMN_ALIASES` config map + reverse lookup (single O(n) pass, first-match-wins).
 
-**Status:** Not in current v9.
+**Status:** Applied in `Code.gs` v10. `COLUMN_ALIASES` config map and `_aliasReverseLookup` reverse lookup replace the else-if chain in `getColumnIndices()`.
 
 ---
 
@@ -248,9 +248,9 @@ At ~1,000 rows max, no pagination needed. CacheService 15s TTL handles the read 
 
 ---
 
-### ⚠️ 4.2 Environment variables for GAS URL
+### ✅ 4.2 Environment variables for GAS URL
 
-**Status:** Attempted — `import.meta.env.VITE_GAS_URL` was implemented and the GitHub secret was added. However, Angular's `@angular/build:application` (esbuild) does not inject `VITE_*` env vars automatically (that's a Vite-specific feature), so the URL always resolved to empty string. Reverted to hardcoded URL in `data.service.ts`. The GitHub secret has been removed from `deploy.yml`.
+**Status:** Implemented via a different approach than the original attempt. `VITE_GAS_URL` was abandoned (Angular esbuild doesn't inject Vite env vars). Instead, `src/environments/environment.prod.ts` holds a `GAS_URL_PLACEHOLDER` literal which CI/CD replaces with `sed` using the `GAS_URL` GitHub secret before building. `data.service.ts` reads from `environment.gasUrl` (the Angular environments pattern). A verification step in `deploy.yml` fails the build if the placeholder was not replaced.
 
 ---
 
@@ -306,20 +306,20 @@ At ~1,000 rows max, no pagination needed. CacheService 15s TTL handles the read 
 
 | Item | Status |
 |------|--------|
-| 1.1 Remove duplicate functions | ❌ |
-| 1.2 Fix lock double-release | ❌ |
+| 1.1 Remove duplicate functions | ✅ |
+| 1.2 Fix lock double-release | ✅ |
 | 1.3 Document off-by-one index | ✅ |
 | 2.1 Auth direction documented | ✅ |
-| 2.2 Backend input validation | ❌ |
-| 2.3 HTML escaping in emails | ❌ |
+| 2.2 Backend input validation | ✅ |
+| 2.3 HTML escaping in emails | ✅ |
 | 2.4 Rate limiting | ❌ |
 | 3.1 Read/write split + autoCheckIn | ✅ |
-| 3.2 Payload doubling fix | ❌ |
-| 3.3 Column name references | ❌ |
-| 3.4 Flat map getColumnIndices | ❌ |
+| 3.2 Payload doubling fix | ✅ |
+| 3.3 Column name references | ✅ |
+| 3.4 Flat map getColumnIndices | ✅ |
 | 3.5 Pagination | 🔵 N/A |
 | 4.1 roleGuard TODO | ✅ |
-| 4.2 GAS URL env variable | ⚠️ Reverted |
+| 4.2 GAS URL env variable | ✅ |
 | 4.3 Remove hardcoded email | ✅ |
 | 4.4 Fire-with-fallback sync | ✅ |
 | 4.5 Global error handler | ✅ |
@@ -329,7 +329,7 @@ At ~1,000 rows max, no pagination needed. CacheService 15s TTL handles the read 
 | 4.9 Tailwind production build | ⚠️ Reverted |
 | 4.10 .gitignore + .env.example | ✅ |
 
-**9 / 22 fully done. 5 backend items remain (1.1, 1.2, 2.2, 2.3, 2.4, 3.2, 3.3, 3.4) — all blocked on a stable backend redeploy.**
+**19 / 22 fully done. 1 item outstanding (2.4 Rate limiting). 4.9 Tailwind production build remains reverted.**
 
 ---
 

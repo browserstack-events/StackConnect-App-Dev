@@ -22,6 +22,8 @@ export const SYNC_CONFIG = {
   BACKEND_TIMEOUT_MS: 5_000,
   /** Maximum number of times a failed sync will be re-queued */
   MAX_PENDING_RETRIES: 3,
+  /** How often the role-selection page re-fetches event data to pick up SPOC changes (ms) */
+  EVENT_REFRESH_INTERVAL_MS: 15 * 60 * 1000,
 } as const;
 
 export const VALIDATION = {
@@ -29,7 +31,7 @@ export const VALIDATION = {
   /** Must start with + and contain 7–20 digits/separators */
   PHONE_REGEX: /^\+[0-9\s\-().]{6,19}$/,
   /** Substrings that identify personal / non-corporate email domains */
-  PERSONAL_EMAIL_DOMAINS: ['@gmail.', '@yahoo.', '@zoho.', '@hotmail.', '@outlook.'],
+  PERSONAL_EMAIL_DOMAINS: ['@gmail.', '@yahoo.', '@zohomail.', '@hotmail.', '@outlook.'],
   /** TLD suffix that identifies educational institutions */
   BLOCKED_TLD: '.edu',
 } as const;

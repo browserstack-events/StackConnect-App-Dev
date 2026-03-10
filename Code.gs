@@ -598,7 +598,18 @@ function updateAttendee(sheet, data, lock) {
   if (emailTriggerNeeded) {
     Logger.log('🚨 ATTENDANCE TRUE — Preparing email...');
     try {
-      sendCheckInNotification(sheet, rowIndex - 1, headers, values);
+      // Re-read emailSent fresh from the sheet (not from the stale snapshot).
+      // Prevents duplicate emails when a retried payload arrives after the first
+      // attempt already wrote attendance + sent the notification.
+      // If emailSent is not set (e.g. first email attempt failed), we still send.
+      const alreadySent = indices.emailSent !== undefined &&
+        !!sheet.getRange(rowIndex, indices.emailSent + 1).getValue();
+
+      if (!alreadySent) {
+        sendCheckInNotification(sheet, rowIndex - 1, headers, values);
+      } else {
+        Logger.log('📧 Email already sent for this attendee — skipping retry.');
+      }
     } catch (e) {
       Logger.log('❌ Email Notification Failed: ' + e.toString());
     }
