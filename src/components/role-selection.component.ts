@@ -1,8 +1,9 @@
-import { Component, inject, input, computed, signal, OnInit } from '@angular/core';
+import { Component, inject, input, computed, signal, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, RouterModule } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DataService } from '../services/data.service';
+import { SYNC_CONFIG } from '../constants';
 
 @Component({
   selector: 'app-role-selection',
@@ -166,9 +167,10 @@ import { DataService } from '../services/data.service';
     </div>
   `
 })
-export class RoleSelectionComponent implements OnInit {
+export class RoleSelectionComponent implements OnInit, OnDestroy {
   private dataService = inject(DataService);
   private router = inject(Router);
+  private spocRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
   id = input.required<string>();
 
@@ -207,10 +209,36 @@ export class RoleSelectionComponent implements OnInit {
       console.error('Event not found');
     } else {
       console.log('✓ Event loaded:', event.name);
-      // Initialize SPOC fields
       this.defaultSpocName.set(event.defaultSpocName || '');
       this.defaultSpocEmail.set(event.defaultSpocEmail || '');
       this.defaultSpocSlack.set(event.defaultSpocSlack || '');
+    }
+
+    // Background refresh: update SPOC fields from backend without blocking render.
+    // Skipped if admin is mid-edit to avoid clobbering unsaved changes.
+    this.dataService.getEventFromMasterLog(eventId).then(refreshed => {
+      if (refreshed && !this.isEditingSpoc()) {
+        this.defaultSpocName.set(refreshed.defaultSpocName || '');
+        this.defaultSpocEmail.set(refreshed.defaultSpocEmail || '');
+        this.defaultSpocSlack.set(refreshed.defaultSpocSlack || '');
+      }
+    });
+
+    // Re-fetch every 15 min to keep SPOC data fresh; skip if admin is mid-edit
+    this.spocRefreshInterval = setInterval(async () => {
+      if (this.isEditingSpoc()) return;
+      const refreshed = await this.dataService.getEventFromMasterLog(eventId);
+      if (refreshed) {
+        this.defaultSpocName.set(refreshed.defaultSpocName || '');
+        this.defaultSpocEmail.set(refreshed.defaultSpocEmail || '');
+        this.defaultSpocSlack.set(refreshed.defaultSpocSlack || '');
+      }
+    }, SYNC_CONFIG.EVENT_REFRESH_INTERVAL_MS);
+  }
+
+  ngOnDestroy() {
+    if (this.spocRefreshInterval !== null) {
+      clearInterval(this.spocRefreshInterval);
     }
   }
 

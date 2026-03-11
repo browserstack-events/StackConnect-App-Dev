@@ -1,8 +1,9 @@
-import { Component, inject, input, signal, OnInit } from '@angular/core';
+import { Component, inject, input, signal, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DataService, validateWalkInData } from '../services/data.service';
 import { Router } from '@angular/router';
+import { SYNC_CONFIG } from '../constants';
 
 @Component({
   selector: 'app-walk-in-page',
@@ -133,9 +134,10 @@ import { Router } from '@angular/router';
   `,
   styles: []
 })
-export class WalkInPageComponent implements OnInit {
+export class WalkInPageComponent implements OnInit, OnDestroy {
   private dataService = inject(DataService);
   private router      = inject(Router);
+  private eventRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
   id = input.required<string>();
 
@@ -157,7 +159,6 @@ export class WalkInPageComponent implements OnInit {
     let event = this.dataService.getEventById(eventId);
 
     if (!event) {
-      console.log('Event not in localStorage, fetching from master log...');
       event = await this.dataService.getEventFromMasterLog(eventId) ?? undefined;
     }
 
@@ -170,6 +171,23 @@ export class WalkInPageComponent implements OnInit {
     this.currentEvent = event;
     this.eventName.set(event.name);
     this.dataService.sheetName.set(event.name);
+
+    // Background refresh: update currentEvent with latest SPOC fields without blocking render
+    this.dataService.getEventFromMasterLog(eventId).then(refreshed => {
+      if (refreshed) this.currentEvent = refreshed;
+    });
+
+    // Keep currentEvent fresh on shared/kiosk devices left open for extended periods
+    this.eventRefreshInterval = setInterval(async () => {
+      const refreshed = await this.dataService.getEventFromMasterLog(eventId);
+      if (refreshed) this.currentEvent = refreshed;
+    }, SYNC_CONFIG.EVENT_REFRESH_INTERVAL_MS);
+  }
+
+  ngOnDestroy() {
+    if (this.eventRefreshInterval !== null) {
+      clearInterval(this.eventRefreshInterval);
+    }
   }
 
   async onSubmit() {
