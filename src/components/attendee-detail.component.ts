@@ -2,7 +2,7 @@ import { Component, inject, input, output, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Attendee } from '../services/data.service';
-import { DummyAuthService } from '../services/dummy-auth.service';
+import { AuthService } from '../services/auth.service';
 
 @Component({
   selector: 'app-attendee-detail',
@@ -221,8 +221,8 @@ import { DummyAuthService } from '../services/dummy-auth.service';
                   </div>
                 </div>
 
-                <!-- Notes Section (ONLY if logged in) -->
-                @if (dummyAuth.isLoggedIn()()) {
+                <!-- Notes Section (SPOC mode only — guarded by !isAdmin check upstream) -->
+                @if (!isAdmin()) {
                   <div class="border-t border-gray-100 pt-4">
                     <div class="flex items-center justify-between mb-3">
                       <h4 class="text-xs font-semibold text-gray-500 uppercase">Notes</h4>
@@ -333,7 +333,7 @@ export class AttendeeDetailComponent {
   updateAttendance = output<void>();
   updateNote = output<string>();
 
-  dummyAuth = inject(DummyAuthService);
+  authService = inject(AuthService);
 
   isEditingNote = signal(false);
   noteText = signal('');
@@ -400,15 +400,10 @@ export class AttendeeDetailComponent {
     const noteText = this.newNoteText().trim();
     if (!noteText) return;
 
-    const user = this.dummyAuth.getUser()();
-    if (!user) {
-      alert('You must be logged in to add notes');
-      return;
-    }
+    const authorName = this.authService.spocName() || 'SPOC';
 
     // Build author prefix
-    const authorPrefix = `${user.name} (${user.email})`;
-    const newEntry = `${authorPrefix}: ${noteText}`;
+    const newEntry = `${authorName}: ${noteText}`;
 
     // Prepend to existing notes with \n---\n delimiter
     const existingNotes = this.attendee().notes || '';

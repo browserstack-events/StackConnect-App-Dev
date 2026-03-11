@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterModule } from '@angular/router';
 import { DataService, Attendee, validateWalkInData } from '../services/data.service';
 import { AttendeeDetailComponent } from './attendee-detail.component';
-import { DummyAuthService } from "../services/dummy-auth.service";
+import { AuthService } from '../services/auth.service';
 import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
 
 @Component({
@@ -33,37 +33,22 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
           </div>
           
           <div class="flex items-center gap-3">
-            <!-- Dummy Auth Control (SPOC Only) -->
-            @if (mode() === 'spoc') {
-              @if (!dummyAuth.isLoggedIn()()) {
-                <!-- <button 
-                  (click)="dummyAuth.signIn()"
-                  class="bg-white/20 text-white hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 border border-white/30"
-                  title="Sign in with BrowserStack Account">
-                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
-                  </svg>
-                  Sign In
-                </button> -->
-              } @else {
-                <div class="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-lg border border-white/20">
-                  <div class="flex items-center gap-2">
-                    <div class="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-xs">
-                      {{ dummyAuth.getUser()()?.name.charAt(0) || 'H' }}
-                    </div>
-                    <span class="text-sm text-white font-medium">{{ dummyAuth.getUser()()?.name || 'User' }}</span>
-                  </div>
-                  <button 
-                    (click)="dummyAuth.signOut()"
-                    class="text-white/80 hover:text-white p-1 transition-colors"
-                    title="Sign out">
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
-                  </button>
-                </div>
-              }
-            }
+            <!-- Auth User Display & Sign-Out -->
+            <div class="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-lg border border-white/20">
+              <div class="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-xs">
+                {{ (authService.displayName() || 'U').charAt(0).toUpperCase() }}
+              </div>
+              <span class="text-sm text-white font-medium hidden sm:block">{{ authService.displayName() }}</span>
+              <button
+                (click)="signOut()"
+                class="text-white/70 hover:text-white p-1 transition-colors ml-1"
+                title="Sign out">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </button>
+            </div>
 
             <!-- Sync Button -->
             <button 
@@ -538,7 +523,7 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
 })
 export class SpocDashboardComponent implements OnInit, OnDestroy {
   dataService = inject(DataService);
-  dummyAuth = inject(DummyAuthService);
+  authService = inject(AuthService);
   router = inject(Router);
 
   // Inputs mapped from Route Data/Params
@@ -602,32 +587,38 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   }
 
   async initializeDashboard() {
+    const requiredRole = this.mode() === 'admin' ? 'desk' : 'spoc';
+
+    // Guard: abort if session is no longer valid (e.g. TTL expired mid-session)
+    if (!this.authService.hasValidSession(requiredRole)) {
+      this.router.navigate(['/event', this.eventId()]);
+      return;
+    }
+
     const eventId = this.eventId();
 
-    // Try to get from localStorage first
     let event = this.dataService.getEventById(eventId);
-
-    // If not found, fetch from master log
     if (!event) {
-      console.log('Event not in localStorage, fetching from master log...');
       this.isSyncing.set(true);
       event = await this.dataService.getEventFromMasterLog(eventId);
       this.isSyncing.set(false);
     }
 
     if (!event) {
-      console.error('Event not found');
       alert('Event not found. Please check the URL or create the event first.');
       this.router.navigate(['/']);
       return;
     }
 
-    console.log('✓ Event loaded:', event.name);
-
-    // Load event data
+    // Data fetch only proceeds after auth is confirmed above
     this.isSyncing.set(true);
     await this.dataService.loadFromBackend(event.sheetUrl, event.name);
     this.isSyncing.set(false);
+  }
+
+  signOut() {
+    this.authService.logout();
+    this.router.navigate(['/event', this.eventId()]);
   }
 
   async syncData() {

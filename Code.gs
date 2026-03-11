@@ -36,7 +36,7 @@ function handleRequest(e) {
     const data = { ...params, ...postData };
     const action = data.action;
 
-    const readActions = ['read', 'get_event', 'get_all_events', 'metadata'];
+    const readActions = ['read', 'get_event', 'get_all_events', 'metadata', 'login'];
     if (readActions.includes(action)) return handleReadActions(action, data);
     return handleWriteActions(action, data);
 
@@ -48,6 +48,7 @@ function handleRequest(e) {
 function handleReadActions(action, data) {
   if (action === 'get_event') return getEventFromMaster(data.eventId);
   if (action === 'get_all_events') return getAllEventsFromMaster();
+  if (action === 'login') return handleLogin(data);
 
   if (!data.sheetUrl && !data.sheetName) {
     return jsonResponse({ status: 'error', error: 'Missing sheetUrl or sheetName' });
@@ -86,6 +87,38 @@ function handleReadActions(action, data) {
   }
 
   return jsonResponse({ status: 'error', error: 'Unknown Read Action' });
+}
+
+// ─── AUTHENTICATION ───────────────────────────────────────────────────────────
+
+/**
+ * Validates a role passphrase against GAS Script Properties.
+ * Set DESK_PASSPHRASE and SPOC_PASSPHRASE in:
+ *   GAS Editor → Project Settings → Script Properties
+ */
+function handleLogin(data) {
+  const role = data.role;
+  const passphrase = data.passphrase;
+
+  if (role !== 'desk' && role !== 'spoc') {
+    return jsonResponse({ status: 'error', error: 'Invalid role' });
+  }
+  if (!passphrase) {
+    return jsonResponse({ status: 'error', error: 'Passphrase is required' });
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  const propKey = role === 'desk' ? 'DESK_PASSPHRASE' : 'SPOC_PASSPHRASE';
+  const expected = props.getProperty(propKey);
+
+  if (!expected) {
+    return jsonResponse({ status: 'error', error: 'Authentication not configured. Contact the administrator.' });
+  }
+  if (passphrase !== expected) {
+    return jsonResponse({ status: 'error', error: 'Incorrect passphrase. Please try again.' });
+  }
+
+  return jsonResponse({ status: 'success', role: role });
 }
 
 // 2.2: validatePayload is called BEFORE acquiring the lock — fail fast on bad input
