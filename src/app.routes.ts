@@ -4,7 +4,7 @@ import { LandingPageComponent } from './components/landing-page.component';
 import { RoleSelectionComponent } from './components/role-selection.component';
 import { SpocDashboardComponent } from './components/spoc-dashboard.component';
 import { WalkInPageComponent } from './components/walk-in-page.component';
-import { deskGuard, spocGuard, walkinGuard } from './guards/role-guard';
+import { walkinGuard } from './guards/role-guard';
 
 /**
  * ✅ SAFE PUBLIC HOME COMPONENT
@@ -57,14 +57,12 @@ export const routes: Routes = [
   {
     path: 'event/:id/desk',
     component: SpocDashboardComponent,
-    data: { mode: 'admin' },
-    canActivate: [deskGuard]
+    data: { mode: 'admin' }
   },
   {
     path: 'event/:id/spoc',
     component: SpocDashboardComponent,
-    data: { mode: 'spoc' },
-    canActivate: [spocGuard]
+    data: { mode: 'spoc' }
   },
   {
     path: 'register/:id',

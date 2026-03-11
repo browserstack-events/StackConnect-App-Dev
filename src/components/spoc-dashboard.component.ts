@@ -11,7 +11,20 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
   selector: 'app-spoc-dashboard',
   standalone: true,
   imports: [CommonModule, FormsModule, AttendeeDetailComponent, RouterModule],
+  styles: [`
+    @keyframes overlayFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes modalSlideUp {
+      from { opacity: 0; transform: translateY(16px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0)   scale(1);    }
+    }
+    .overlay-enter { animation: overlayFadeIn 0.2s ease-out forwards; }
+    .modal-enter   { animation: modalSlideUp  0.25s cubic-bezier(0.16,1,0.3,1) forwards; }
+  `],
   template: `
+    @if (!showLoginOverlay()) {
     <div class="min-h-screen flex flex-col bg-gray-50">
       <!-- Top Navigation Bar -->
       <header class="border-b border-gray-200 sticky top-0 z-10 shadow-sm transition-colors"
@@ -519,6 +532,128 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
       }
 
     </div>
+    } <!-- end @if (!showLoginOverlay()) -->
+
+    <!-- ── Login Overlay ──────────────────────────────────────────────────────
+         Shown whenever the session is missing or expired.
+         Nothing renders behind it — the dashboard is gated by @if above.
+    -->
+    @if (showLoginOverlay()) {
+      <div class="fixed inset-0 z-50 flex items-center justify-center p-4 overlay-enter">
+
+        <!-- Translucent blurred backdrop — covers the dashboard chrome -->
+        <div class="absolute inset-0 bg-slate-900/70 backdrop-blur-md"></div>
+
+        <!-- Modal card -->
+        <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden modal-enter">
+
+          <!-- Gradient header strip -->
+          <div class="h-1 w-full"
+               [style.background]="mode() === 'admin'
+                 ? 'linear-gradient(90deg, #0d9488, #14b8a6, #0ea5e9)'
+                 : 'linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6)'">
+          </div>
+
+          <div class="p-8 pt-7">
+
+            <!-- Icon + Title -->
+            <div class="flex items-center gap-4 mb-6">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                   [class.bg-teal-50]="mode() === 'admin'"
+                   [class.bg-blue-50]="mode() === 'spoc'">
+                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+                     [class.text-teal-600]="mode() === 'admin'"
+                     [class.text-blue-600]="mode() === 'spoc'">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              </div>
+              <div>
+                <h2 class="text-xl font-bold text-slate-900">
+                  {{ mode() === 'admin' ? 'Registration Desk' : 'Sales SPOC' }}
+                </h2>
+                <p class="text-sm text-slate-500 mt-0.5">
+                  {{ mode() === 'admin'
+                      ? 'Enter the desk passphrase to continue'
+                      : 'Enter your name and passphrase to continue' }}
+                </p>
+              </div>
+            </div>
+
+            <!-- Form fields -->
+            <div class="space-y-3">
+
+              <!-- SPOC name (SPOC variant only) -->
+              @if (mode() === 'spoc') {
+                <div class="relative">
+                  <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                  </div>
+                  <input type="text"
+                         [ngModel]="loginSpocName()"
+                         (ngModelChange)="loginSpocName.set($event)"
+                         placeholder="Your Name"
+                         autocomplete="name"
+                         class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
+                </div>
+              }
+
+              <!-- Passphrase -->
+              <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                          d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                  </svg>
+                </div>
+                <input type="password"
+                       [ngModel]="loginPassphrase()"
+                       (ngModelChange)="loginPassphrase.set($event)"
+                       placeholder="Passphrase"
+                       autocomplete="current-password"
+                       (keyup.enter)="submitLogin()"
+                       class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 transition-all focus:border-transparent"
+                       [class.focus:ring-teal-500]="mode() === 'admin'"
+                       [class.focus:ring-blue-500]="mode() === 'spoc'" />
+              </div>
+
+              <!-- Error banner -->
+              @if (loginError()) {
+                <div class="flex items-center gap-2.5 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">
+                  <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {{ loginError() }}
+                </div>
+              }
+
+              <!-- Submit -->
+              <button (click)="submitLogin()"
+                      [disabled]="isLoggingIn()"
+                      class="w-full mt-1 py-3 rounded-xl text-white text-sm font-bold tracking-wide transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm active:scale-95"
+                      [class.bg-teal-600]="mode() === 'admin'"
+                      [class.hover:bg-teal-700]="mode() === 'admin' && !isLoggingIn()"
+                      [class.bg-blue-600]="mode() === 'spoc'"
+                      [class.hover:bg-blue-700]="mode() === 'spoc' && !isLoggingIn()">
+                @if (isLoggingIn()) {
+                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Verifying…
+                } @else {
+                  Access Dashboard
+                }
+              </button>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    }
   `
 })
 export class SpocDashboardComponent implements OnInit, OnDestroy {
@@ -530,13 +665,18 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   mode = input.required<'admin' | 'spoc'>();
   eventId = input.required<string>({ alias: 'id' });
 
-  // State
+  // Auth overlay state
+  showLoginOverlay = signal(false);
+  loginPassphrase  = signal('');
+  loginSpocName    = signal('');
+  loginError       = signal('');
+  isLoggingIn      = signal(false);
+
+  // Dashboard state
   selectedSpoc = signal<string>('All');
   filterStatus = signal<'all' | 'checked-in' | 'pending'>('all');
-  searchQuery = signal<string>('');
-
-  isSyncing = signal<boolean>(false);
-
+  searchQuery  = signal<string>('');
+  isSyncing    = signal<boolean>(false);
   selectedAttendee = signal<Attendee | null>(null);
 
 
@@ -589,12 +729,16 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   async initializeDashboard() {
     const requiredRole = this.mode() === 'admin' ? 'desk' : 'spoc';
 
-    // Guard: abort if session is no longer valid (e.g. TTL expired mid-session)
+    // Show login overlay if no valid session — data fetch is deferred until after login
     if (!this.authService.hasValidSession(requiredRole)) {
-      this.router.navigate(['/event', this.eventId()]);
+      this.showLoginOverlay.set(true);
       return;
     }
 
+    await this.loadDashboardData();
+  }
+
+  async loadDashboardData() {
     const eventId = this.eventId();
 
     let event = this.dataService.getEventById(eventId);
@@ -610,15 +754,41 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Data fetch only proceeds after auth is confirmed above
     this.isSyncing.set(true);
     await this.dataService.loadFromBackend(event.sheetUrl, event.name);
     this.isSyncing.set(false);
   }
 
+  async submitLogin() {
+    if (this.isLoggingIn()) return;
+
+    const role = this.mode() === 'admin' ? 'desk' : 'spoc';
+    const passphrase = this.loginPassphrase().trim();
+    const spocName   = this.loginSpocName().trim();
+
+    if (!passphrase) { this.loginError.set('Please enter a passphrase.'); return; }
+    if (role === 'spoc' && !spocName) { this.loginError.set('Please enter your name.'); return; }
+
+    this.loginError.set('');
+    this.isLoggingIn.set(true);
+
+    const result = await this.authService.login(role, passphrase, spocName);
+    this.isLoggingIn.set(false);
+
+    if (result.success) {
+      this.showLoginOverlay.set(false);
+      await this.loadDashboardData();
+    } else {
+      this.loginError.set(result.error || 'Authentication failed.');
+    }
+  }
+
   signOut() {
     this.authService.logout();
-    this.router.navigate(['/event', this.eventId()]);
+    this.showLoginOverlay.set(true);
+    this.loginPassphrase.set('');
+    this.loginSpocName.set('');
+    this.loginError.set('');
   }
 
   async syncData() {

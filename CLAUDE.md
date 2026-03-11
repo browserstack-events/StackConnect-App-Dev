@@ -46,12 +46,13 @@ In production, CI/CD replaces `GAS_URL_PLACEHOLDER` in `src/environments/environ
 | File | Purpose |
 |------|---------|
 | `src/components/landing-page.component.ts` | Admin console — create/manage events, copy share links |
-| `src/components/spoc-dashboard.component.ts` | Main attendee grid; `mode='admin'` (full access) or `mode='spoc'` (read-mostly) |
+| `src/components/spoc-dashboard.component.ts` | Main attendee grid; `mode='admin'` (full access) or `mode='spoc'` (read-mostly). Shows login overlay when session is absent/expired — data fetch is deferred until auth passes. |
 | `src/components/attendee-detail.component.ts` | Modal showing attendee details, lead intel (markdown), notes |
 | `src/components/walk-in-page.component.ts` | Public registration form for walk-in attendees |
-| `src/components/role-selection.component.ts` | Gateway page to choose Desk / SPOC / Walk-in role |
+| `src/components/role-selection.component.ts` | Gateway page to choose Desk / SPOC / Walk-in role (no auth here — links go directly to the dashboard URLs) |
+| `src/services/auth.service.ts` | Passphrase-based auth; validates against GAS Script Properties; stores session in localStorage with 6-hour TTL |
 | `src/services/data.service.ts` | All API calls, signals-based state, sync retry queue |
-| `src/guards/role-guard.ts` | Route guards (currently permissive — auth is a TODO) |
+| `src/guards/role-guard.ts` | `walkinGuard` (public); desk/spoc routes have no guard — the dashboard component handles auth internally via the login overlay |
 
 ### Data Flow
 1. Frontend calls GAS via `fetch()` in `DataService`
@@ -73,7 +74,8 @@ In production, CI/CD replaces `GAS_URL_PLACEHOLDER` in `src/environments/environ
 
 - **Hash routing** is intentional — required for GitHub Pages static hosting without a server
 - **Zoneless change detection** (`provideZonelessChangeDetection()`) — use Angular Signals for reactivity; do not use `NgZone` or zone-dependent APIs
-- **No authentication yet** — `DummyAuthService` and `roleGuard` are placeholders; the README and PLAN.md document the intended direction
+- **Auth via login overlay on the dashboard** — the desk and SPOC links are shared directly (`/#/event/:id/desk`, `/#/event/:id/spoc`). When a user opens these links without a valid session, the dashboard renders but shows a full-screen translucent/blur overlay with a passphrase form. No data is fetched until auth succeeds. Sessions persist in localStorage with a 6-hour TTL. Passphrases (`DESK_PASSPHRASE`, `SPOC_PASSPHRASE`) are stored in GAS Script Properties — never in the frontend bundle.
+- **Login is a GET request to GAS** — using `?action=login&role=…&passphrase=…` to avoid CORS preflight (OPTIONS) which GAS cannot handle
 - **Flexible column parsing** — `parseJsonData()` in DataService handles varying column names/order from Google Sheets; column mapping is case-insensitive and alias-based
 - **Walk-in validation** rejects personal email domains (`@gmail`, `@yahoo`, `@hotmail`, `@outlook`, `@zoho`, `.edu`)
 

@@ -3,25 +3,12 @@ import { CommonModule } from '@angular/common';
 import { Router, RouterModule } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DataService } from '../services/data.service';
-import { AuthService } from '../services/auth.service';
 import { SYNC_CONFIG } from '../constants';
 
 @Component({
   selector: 'app-role-selection',
   standalone: true,
   imports: [CommonModule, RouterModule, FormsModule],
-  styles: [`
-    @keyframes overlayFadeIn {
-      from { opacity: 0; }
-      to   { opacity: 1; }
-    }
-    @keyframes modalSlideUp {
-      from { opacity: 0; transform: translateY(16px) scale(0.97); }
-      to   { opacity: 1; transform: translateY(0)   scale(1);    }
-    }
-    .overlay-enter { animation: overlayFadeIn 0.2s ease-out forwards; }
-    .modal-enter   { animation: modalSlideUp  0.25s cubic-bezier(0.16,1,0.3,1) forwards; }
-  `],
   template: `
     <div class="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
 
@@ -48,11 +35,9 @@ import { SYNC_CONFIG } from '../constants';
           </a>
         </div>
 
-        <!-- Role Cards -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 px-4 mb-12">
 
-          <!-- Registration Desk Card -->
-          <button (click)="openLogin('desk')"
+          <a [routerLink]="['/event', id(), 'desk']"
              class="group bg-white rounded-2xl p-8 border border-gray-200 hover:border-teal-500 hover:shadow-lg transition-all duration-300 flex flex-col items-center text-center h-full cursor-pointer relative overflow-hidden">
              <div class="w-24 h-24 rounded-full bg-teal-50 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300 group-hover:bg-teal-100">
                <svg class="w-10 h-10 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -64,10 +49,9 @@ import { SYNC_CONFIG } from '../constants';
              <p class="text-sm text-slate-500 leading-relaxed max-w-xs mx-auto">
                Fast check-in mode. Access to all attendees and status management.
              </p>
-          </button>
+          </a>
 
-          <!-- Sales SPOC Card -->
-          <button (click)="openLogin('spoc')"
+          <a [routerLink]="['/event', id(), 'spoc']"
              class="group bg-white rounded-2xl p-8 border border-gray-200 hover:border-blue-500 hover:shadow-lg transition-all duration-300 flex flex-col items-center text-center h-full cursor-pointer relative overflow-hidden">
              <div class="w-24 h-24 rounded-full bg-blue-50 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300 group-hover:bg-blue-100">
                <svg class="w-10 h-10 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -78,9 +62,8 @@ import { SYNC_CONFIG } from '../constants';
              <p class="text-sm text-slate-500 leading-relaxed max-w-xs mx-auto">
                View your assigned attendees, track arrivals, and manage notes.
              </p>
-          </button>
+          </a>
 
-          <!-- Walk-in Card (public — no auth) -->
           <a [routerLink]="['/register', id()]"
              class="group bg-white rounded-2xl p-8 border border-gray-200 hover:border-purple-500 hover:shadow-lg transition-all duration-300 flex flex-col items-center text-center h-full cursor-pointer relative overflow-hidden">
              <div class="w-24 h-24 rounded-full bg-purple-50 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300 group-hover:bg-purple-100">
@@ -174,139 +157,10 @@ import { SYNC_CONFIG } from '../constants';
 
       </div>
     </div>
-
-    <!-- ── Login Modal Overlay ─────────────────────────────────────────────── -->
-    @if (activeForm()) {
-      <div class="fixed inset-0 z-50 flex items-center justify-center p-4 overlay-enter">
-
-        <!-- Translucent blurred backdrop -->
-        <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" (click)="onCloseLogin()"></div>
-
-        <!-- Modal card -->
-        <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden modal-enter"
-             (click)="$event.stopPropagation()">
-
-          <!-- Gradient header strip -->
-          <div class="h-1 w-full"
-               [style.background]="activeForm() === 'desk'
-                 ? 'linear-gradient(90deg, #0d9488, #14b8a6, #0ea5e9)'
-                 : 'linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6)'">
-          </div>
-
-          <!-- Close button -->
-          <button (click)="onCloseLogin()"
-                  class="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all">
-            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-
-          <div class="p-8 pt-7">
-
-            <!-- Icon + Title -->
-            <div class="flex items-center gap-4 mb-6">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-                   [class.bg-teal-50]="activeForm() === 'desk'"
-                   [class.bg-blue-50]="activeForm() === 'spoc'">
-                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
-                     [class.text-teal-600]="activeForm() === 'desk'"
-                     [class.text-blue-600]="activeForm() === 'spoc'">
-                  <path stroke-linecap="round" stroke-linejoin="round"
-                        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <div>
-                <h2 class="text-xl font-bold text-slate-900">
-                  {{ activeForm() === 'desk' ? 'Registration Desk' : 'Sales SPOC' }}
-                </h2>
-                <p class="text-sm text-slate-500 mt-0.5">
-                  {{ activeForm() === 'desk'
-                      ? 'Enter the desk passphrase to continue'
-                      : 'Enter your name and passphrase to continue' }}
-                </p>
-              </div>
-            </div>
-
-            <!-- Form fields -->
-            <div class="space-y-3">
-
-              <!-- SPOC name (SPOC variant only) -->
-              @if (activeForm() === 'spoc') {
-                <div class="relative">
-                  <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                      <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                  <input type="text"
-                         [ngModel]="spocNameInput()"
-                         (ngModelChange)="spocNameInput.set($event)"
-                         placeholder="Your Name"
-                         autocomplete="name"
-                         class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
-                </div>
-              }
-
-              <!-- Passphrase -->
-              <div class="relative">
-                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                          d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                  </svg>
-                </div>
-                <input type="password"
-                       [ngModel]="passphraseInput()"
-                       (ngModelChange)="passphraseInput.set($event)"
-                       placeholder="Passphrase"
-                       autocomplete="current-password"
-                       (keyup.enter)="onSubmitLogin()"
-                       class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 transition-all focus:border-transparent"
-                       [class.focus:ring-teal-500]="activeForm() === 'desk'"
-                       [class.focus:ring-blue-500]="activeForm() === 'spoc'" />
-              </div>
-
-              <!-- Error banner -->
-              @if (loginError()) {
-                <div class="flex items-center gap-2.5 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">
-                  <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  {{ loginError() }}
-                </div>
-              }
-
-              <!-- Submit button -->
-              <button (click)="onSubmitLogin()"
-                      [disabled]="isLoggingIn()"
-                      class="w-full mt-1 py-3 rounded-xl text-white text-sm font-bold tracking-wide transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm"
-                      [class.bg-teal-600]="activeForm() === 'desk'"
-                      [class.hover:bg-teal-700]="activeForm() === 'desk' && !isLoggingIn()"
-                      [class.active:scale-95]="!isLoggingIn()"
-                      [class.bg-blue-600]="activeForm() === 'spoc'"
-                      [class.hover:bg-blue-700]="activeForm() === 'spoc' && !isLoggingIn()">
-                @if (isLoggingIn()) {
-                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Verifying…
-                } @else {
-                  Access Dashboard
-                }
-              </button>
-
-            </div>
-          </div>
-        </div>
-      </div>
-    }
   `
 })
 export class RoleSelectionComponent implements OnInit, OnDestroy {
   private dataService = inject(DataService);
-  private authService = inject(AuthService);
   private router = inject(Router);
   private spocRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -321,13 +175,6 @@ export class RoleSelectionComponent implements OnInit, OnDestroy {
   defaultSpocEmail = signal('');
   defaultSpocSlack = signal('');
   isEditingSpoc    = signal(false);
-
-  // Login modal state
-  activeForm    = signal<'desk' | 'spoc' | null>(null);
-  passphraseInput = signal('');
-  spocNameInput   = signal('');
-  loginError      = signal('');
-  isLoggingIn     = signal(false);
 
   async ngOnInit() {
     const eventId = this.id();
@@ -367,49 +214,6 @@ export class RoleSelectionComponent implements OnInit, OnDestroy {
   ngOnDestroy() {
     if (this.spocRefreshInterval !== null) {
       clearInterval(this.spocRefreshInterval);
-    }
-  }
-
-  openLogin(role: 'desk' | 'spoc') {
-    this.activeForm.set(role);
-    this.passphraseInput.set('');
-    this.spocNameInput.set('');
-    this.loginError.set('');
-  }
-
-  onCloseLogin() {
-    this.activeForm.set(null);
-    this.loginError.set('');
-    this.isLoggingIn.set(false);
-  }
-
-  async onSubmitLogin() {
-    const role = this.activeForm();
-    if (!role || this.isLoggingIn()) return;
-
-    const passphrase = this.passphraseInput().trim();
-    const spocName   = this.spocNameInput().trim();
-
-    if (!passphrase) {
-      this.loginError.set('Please enter a passphrase.');
-      return;
-    }
-    if (role === 'spoc' && !spocName) {
-      this.loginError.set('Please enter your name.');
-      return;
-    }
-
-    this.loginError.set('');
-    this.isLoggingIn.set(true);
-
-    const result = await this.authService.login(role, passphrase, spocName);
-    this.isLoggingIn.set(false);
-
-    if (result.success) {
-      const path = role === 'desk' ? 'desk' : 'spoc';
-      this.router.navigate(['/event', this.id(), path]);
-    } else {
-      this.loginError.set(result.error || 'Authentication failed.');
     }
   }
 
