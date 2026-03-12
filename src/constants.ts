@@ -34,8 +34,6 @@ export const VALIDATION = {
   PHONE_REGEX: /^\+[0-9\s\-().]{6,19}$/,
   /** Substrings that identify personal / non-corporate email domains */
   PERSONAL_EMAIL_DOMAINS: ['@gmail.', '@yahoo.', '@zohomail.', '@hotmail.', '@outlook.'],
-  /** TLD suffix that identifies educational institutions */
-  BLOCKED_TLD: '.edu',
 } as const;
 
 export const DEFAULT_LANYARD_COLOR = 'Yellow';

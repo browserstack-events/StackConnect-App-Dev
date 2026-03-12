@@ -59,8 +59,7 @@ export function validateWalkInData(data: {
   }
 
   const emailLower = data.email.toLowerCase();
-  const isPersonal = VALIDATION.PERSONAL_EMAIL_DOMAINS.some(d => emailLower.includes(d))
-                  || emailLower.endsWith(VALIDATION.BLOCKED_TLD);
+  const isPersonal = VALIDATION.PERSONAL_EMAIL_DOMAINS.some(d => emailLower.includes(d));
   if (isPersonal) {
     return 'Please use your corporate email address. Personal accounts are not accepted.';
   }
