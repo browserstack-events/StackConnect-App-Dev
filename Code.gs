@@ -14,6 +14,54 @@
 
 const MASTER_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1gtZuWwqtI-oI3njQy5hKxmgIfcnyDiRM5FSOBiHeUeA/edit?gid=493451901#gid=493451901';
 
+// ─── ACTION LOGGER ────────────────────────────────────────────────────────────
+
+/**
+ * Finds or creates the "App Logs" sheet in the master spreadsheet.
+ * On first creation sets up a frozen, formatted header row with column widths.
+ */
+function getOrCreateLogSheet() {
+  const ss = SpreadsheetApp.openByUrl(MASTER_SHEET_URL);
+  let logSheet = ss.getSheetByName('App Logs');
+  if (!logSheet) {
+    logSheet = ss.insertSheet('App Logs');
+    const headers = ['Timestamp', 'Action', 'Sheet', 'Subject', 'Details', 'Result', 'Error'];
+    logSheet.appendRow(headers);
+    logSheet.setFrozenRows(1);
+    logSheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    logSheet.setColumnWidth(1, 180); // Timestamp
+    logSheet.setColumnWidth(2, 130); // Action
+    logSheet.setColumnWidth(3, 160); // Sheet
+    logSheet.setColumnWidth(4, 220); // Subject
+    logSheet.setColumnWidth(5, 320); // Details
+    logSheet.setColumnWidth(6, 80);  // Result
+    logSheet.setColumnWidth(7, 280); // Error
+    logSheet.getRange(1, 5).setWrap(true); // Details
+    logSheet.getRange(1, 7).setWrap(true); // Error
+  }
+  return logSheet;
+}
+
+/**
+ * Appends a row to the "App Logs" sheet. Never throws — failures are silently
+ * logged to Logger so they never break the main operation.
+ *
+ * @param {string} action   - e.g. 'check-in', 'walk-in', 'login-ok'
+ * @param {string} sheetName - Event sheet name; empty for login/event actions
+ * @param {string} subject  - Attendee email, role, or eventId
+ * @param {string} details  - Human-readable summary
+ * @param {string} result   - 'success' or 'error'
+ * @param {string} errorMsg - Error message; empty string on success
+ */
+function writeLog(action, sheetName, subject, details, result, errorMsg) {
+  try {
+    const logSheet = getOrCreateLogSheet();
+    logSheet.appendRow([new Date(), action, sheetName || '', subject || '', details || '', result, errorMsg || '']);
+  } catch (e) {
+    Logger.log('[writeLog] Failed to write log entry: ' + e.toString());
+  }
+}
+
 function doGet(e) {
   if (!e.parameter.action && !e.postData) {
     return ContentService.createTextOutput(JSON.stringify({
@@ -41,6 +89,7 @@ function handleRequest(e) {
     return handleWriteActions(action, data);
 
   } catch (error) {
+    writeLog('error', '', '', 'Unhandled error in handleRequest', 'error', error.toString());
     return jsonResponse({ status: 'error', error: 'Request Failed: ' + error.toString() });
   }
 }
@@ -115,9 +164,11 @@ function handleLogin(data) {
     return jsonResponse({ status: 'error', error: 'Authentication not configured. Contact the administrator.' });
   }
   if (passphrase !== expected) {
+    writeLog('login-fail', '', role, 'Login failed for role: ' + role, 'error', 'Incorrect passphrase');
     return jsonResponse({ status: 'error', error: 'Incorrect passphrase. Please try again.' });
   }
 
+  writeLog('login-ok', '', role, 'Login succeeded for role: ' + role, 'success', '');
   return jsonResponse({ status: 'success', role: role });
 }
 
@@ -125,12 +176,14 @@ function handleLogin(data) {
 function handleWriteActions(action, data) {
   const validationErrors = validatePayload(action, data);
   if (validationErrors.length > 0) {
+    writeLog('validation-fail', data.sheetName || '', data.email || data.eventId || '', 'Action "' + action + '" failed: ' + validationErrors.join('; '), 'error', validationErrors.join('; '));
     return jsonResponse({ status: 'error', error: 'Validation failed: ' + validationErrors.join('; ') });
   }
 
   const lock = LockService.getScriptLock();
   const hasLock = lock.tryLock(10000);
   if (!hasLock) {
+    writeLog('error', data.sheetName || '', data.email || data.eventId || '', 'Lock timeout for: ' + action, 'error', 'Server busy');
     return jsonResponse({ status: 'error', error: 'Server is busy. Please try again.' });
   }
 
@@ -244,8 +297,10 @@ function logEventToMaster(data) {
     ]);
 
     SpreadsheetApp.flush();
+    writeLog('event-create', '', data.eventId, 'Event created: "' + data.eventName + '"', 'success', '');
     return jsonResponse({ status: 'success', message: 'Event logged to master sheet' });
   } catch (error) {
+    writeLog('error', '', data.eventId || '', 'logEventToMaster failed', 'error', error.toString());
     return jsonResponse({ status: 'error', error: 'Failed to log event: ' + error.toString() });
   }
 }
@@ -353,8 +408,10 @@ function updateEventInMaster(data) {
     }
 
     SpreadsheetApp.flush();
+    writeLog('event-update', '', data.eventId, updates.join(', '), 'success', '');
     return jsonResponse({ status: 'success', message: 'Event updated: ' + updates.join(', '), eventId: data.eventId });
   } catch (error) {
+    writeLog('error', '', data.eventId || '', 'updateEventInMaster failed', 'error', error.toString());
     return jsonResponse({ status: 'error', error: 'Failed to update event: ' + error.toString() });
   }
 }
@@ -528,6 +585,9 @@ function addWalkIn(sheet, data) {
 
     SpreadsheetApp.flush();
 
+    const fullName = ((data.firstName || '') + ' ' + (data.lastName || '')).trim() || data.fullName || data.email;
+    writeLog('walk-in', sheet.getName(), data.email, fullName + ' registered' + (autoCheckIn ? ' and checked IN' : ''), 'success', '');
+
     if (autoCheckIn) {
       try {
         const allValues = sheet.getDataRange().getValues();
@@ -547,6 +607,7 @@ function addWalkIn(sheet, data) {
 
     return jsonResponse({ status: 'success', message: 'Walk-in registered', updatedFields: updatedFields });
   } catch (error) {
+    writeLog('error', sheet ? sheet.getName() : '', data.email || '', 'addWalkIn failed', 'error', error.toString());
     return jsonResponse({ status: 'error', error: error.message });
   }
 }
@@ -618,6 +679,28 @@ function updateAttendee(sheet, data, lock) {
   });
 
   SpreadsheetApp.flush();
+
+  // Build audit log entry before releasing lock
+  const attendeeRow = values[rowIndex - 1];
+  const attendeeFirstName = indices.firstName !== undefined ? (attendeeRow[indices.firstName] || '') : '';
+  const attendeeLastName  = indices.lastName  !== undefined ? (attendeeRow[indices.lastName]  || '') : '';
+  const attendeeFullName  = (attendeeFirstName + ' ' + attendeeLastName).trim() || data.email;
+
+  const changeDetails = [];
+  if (data.attendance !== undefined) changeDetails.push('attendance=' + data.attendance);
+  if (data.lanyardColor  !== undefined) changeDetails.push('lanyardColor=' + data.lanyardColor);
+  if (data.nameCardColor !== undefined) changeDetails.push('nameCardColor=' + data.nameCardColor);
+  if (data.notes         !== undefined) changeDetails.push('notes updated');
+  if (data.leadIntel     !== undefined) changeDetails.push('leadIntel updated');
+  if (data.attendeeType  !== undefined) changeDetails.push('attendeeType=' + data.attendeeType);
+
+  let primaryAction = 'update';
+  if (data.attendance === true || String(data.attendance).toLowerCase() === 'true') primaryAction = 'check-in';
+  else if (data.attendance === false || String(data.attendance).toLowerCase() === 'false') primaryAction = 'check-out';
+  else if (data.lanyardColor  !== undefined) primaryAction = 'lanyard-update';
+  else if (data.notes         !== undefined) primaryAction = 'notes-update';
+
+  writeLog(primaryAction, sheet.getName(), data.email, attendeeFullName + ': ' + changeDetails.join(', '), 'success', '');
 
   // 1.2: Release the lock early so the next writer isn't blocked while email sends.
   // We signal this back to handleWriteActions via lockReleased.
