@@ -705,7 +705,7 @@ export class DataService {
         checkInTime:  checkInDate,
         leadIntel:    this.cleanString(get('leadIntel', 'Account Intel', 'Lead Intel', 'talking points', 'Intel')),
         notes:        this.cleanString(get('notes', 'Note', 'Notes', 'Comment', 'Comments', 'Feedback')),
-        title:        this.cleanString(get('title', 'Title', 'Designation', 'Job Title', 'Role', 'position')),
+        title:        this.cleanString(get('title', 'Title', 'Designation', 'Lead Designation', 'Job Title', 'Role', 'position')),
         linkedin:     this.cleanString(get('linkedin', 'LinkedIn', 'Linkedin Profile', 'LinkedIn URL', 'Profile Link', 'linked_in', 'linkedin_url')),
         attendeeType
       };
