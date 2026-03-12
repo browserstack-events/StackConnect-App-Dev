@@ -103,6 +103,7 @@ export class DataService {
 
   constructor() {
     this.loadEventsFromStorage();
+    this.loadPendingSyncsFromStorage();
   }
 
   // --- SAFE JSON PARSER ---
@@ -465,11 +466,62 @@ export class DataService {
     }
   }
 
+  private loadPendingSyncsFromStorage() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PENDING_SYNCS);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        this.pendingSyncs = parsed;
+        this.syncError.set('Some changes haven\'t synced yet. They will retry on the next refresh.');
+      }
+    } catch (e) {
+      console.warn('Failed to restore pending syncs from storage:', e);
+      try { localStorage.removeItem(STORAGE_KEYS.PENDING_SYNCS); } catch {}
+    }
+  }
+
+  private savePendingSyncs() {
+    try {
+      if (this.pendingSyncs.length === 0) {
+        localStorage.removeItem(STORAGE_KEYS.PENDING_SYNCS);
+      } else {
+        localStorage.setItem(STORAGE_KEYS.PENDING_SYNCS, JSON.stringify(this.pendingSyncs));
+      }
+    } catch (e) {
+      console.warn('Failed to persist pending syncs to storage:', e);
+    }
+  }
+
   private queuePendingSync(payload: any) {
     if (this.pendingSyncs.length < SYNC_CONFIG.MAX_PENDING_RETRIES * 10) {
       this.pendingSyncs.push({ payload, retries: 0 });
+      this.savePendingSyncs();
     }
     this.syncError.set('Some changes haven\'t synced yet. They will retry on the next refresh.');
+  }
+
+  /**
+   * After a backend refresh overwrites rawAttendees, re-apply any changes that
+   * are still sitting in the pending queue so the UI never reverts to a stale
+   * backend state while a retry is in-flight.
+   */
+  private reapplyPendingChanges() {
+    if (this.pendingSyncs.length === 0) return;
+    this.rawAttendees.update(attendees =>
+      attendees.map(a => {
+        const pending = this.pendingSyncs.find(s => s.payload.email === a.email);
+        if (!pending) return a;
+        const p = pending.payload;
+        return {
+          ...a,
+          ...(p.attendance  !== undefined ? { attendance:   p.attendance,
+                                               checkInTime: p.attendance ? (a.checkInTime ?? new Date()) : null } : {}),
+          ...(p.lanyardColor !== undefined ? { lanyardColor: p.lanyardColor } : {}),
+          ...(p.notes        !== undefined ? { notes:        p.notes        } : {}),
+        };
+      })
+    );
   }
 
   private async flushPendingSyncs() {
@@ -477,6 +529,7 @@ export class DataService {
 
     const queue = [...this.pendingSyncs];
     this.pendingSyncs = [];
+    this.savePendingSyncs();
 
     for (const item of queue) {
       if (item.retries >= SYNC_CONFIG.MAX_PENDING_RETRIES) {
@@ -486,7 +539,10 @@ export class DataService {
       await this.syncChangeToBackend({ ...item.payload, _retries: item.retries + 1 });
     }
 
-    if (this.pendingSyncs.length === 0) this.syncError.set(null);
+    if (this.pendingSyncs.length === 0) {
+      this.syncError.set(null);
+      this.savePendingSyncs();
+    }
   }
 
   async loadFromBackend(sheetUrl: string, sheetName?: string): Promise<boolean> {
@@ -509,6 +565,9 @@ export class DataService {
 
       if (json.attendees) {
         this.parseJsonData(json.attendees);
+        // Re-apply any in-flight or queued optimistic changes on top of the
+        // fresh backend snapshot so the UI never reverts while a sync is pending.
+        this.reapplyPendingChanges();
         await this.flushPendingSyncs();
         return true;
       } else if (json.error) {

@@ -13,6 +13,8 @@ export const STORAGE_KEYS = {
   accessKey: (eventId: string) => `access_${eventId}`,
   /** sessionStorage flag set when navigating from the landing page */
   FROM_LANDING: 'from_landing',
+  /** localStorage key for pending (unsynced) write payloads */
+  PENDING_SYNCS: 'stack_connect_pending_syncs',
 } as const;
 
 export const SYNC_CONFIG = {
