@@ -380,7 +380,7 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                   }
                 } @empty {
                   <tr>
-                    <td [attr.colspan]="5" class="px-6 py-12 text-center text-gray-500">
+                    <td [attr.colspan]="mode() === 'spoc' ? 6 : 5" class="px-6 py-12 text-center text-gray-500">
                       No attendees found.
                     </td>
                   </tr>

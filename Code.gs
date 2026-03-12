@@ -176,8 +176,9 @@ function handleLogin(data) {
 function handleWriteActions(action, data) {
   const validationErrors = validatePayload(action, data);
   if (validationErrors.length > 0) {
-    writeLog('validation-fail', data.sheetName || '', data.email || data.eventId || '', 'Action "' + action + '" failed: ' + validationErrors.join('; '), 'error', validationErrors.join('; '));
-    return jsonResponse({ status: 'error', error: 'Validation failed: ' + validationErrors.join('; ') });
+    const errMsg = validationErrors.join('; ');
+    writeLog('validation-fail', data.sheetName || '', data.email || data.eventId || '', 'Action "' + action + '" failed: ' + errMsg, 'error', errMsg);
+    return jsonResponse({ status: 'error', error: 'Validation failed: ' + errMsg });
   }
 
   const lock = LockService.getScriptLock();
