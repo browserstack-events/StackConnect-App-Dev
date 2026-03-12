@@ -2,7 +2,7 @@ import { Component, inject, signal, computed, input, OnInit, OnDestroy, effect }
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterModule } from '@angular/router';
-import { DataService, Attendee, validateWalkInData } from '../services/data.service';
+import { DataService, Attendee } from '../services/data.service';
 import { AttendeeDetailComponent } from './attendee-detail.component';
 import { AuthService } from '../services/auth.service';
 import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
@@ -243,7 +243,7 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                 @for (group of groupedAttendees(); track group.name) {
                   <!-- Explicit Group Header -->
                   <tr class="bg-gray-50 border-b border-gray-200">
-                    <td [attr.colspan]="5" class="px-6 py-2.5">
+                    <td [attr.colspan]="mode() === 'spoc' ? 6 : 5" class="px-6 py-2.5">
                       <div class="flex items-center gap-2">
                          <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">{{ group.name }}</span>
                          <span class="text-[10px] font-semibold text-gray-400 bg-white border border-gray-200 px-1.5 rounded-full">{{ group.items.length }}</span>
@@ -258,7 +258,7 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                         (click)="mode() === 'spoc' ? openDetail(attendee) : null">
                       
                       <!-- Attendee Name -->
-                      <td class="px-6 py-4 whitespace-nowrap">
+                      <td class="px-6 py-4 max-w-xs">
                         <div class="flex items-center">
                           <div class="flex-shrink-0 h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
                                [class.bg-teal-500]="mode() === 'admin'"
