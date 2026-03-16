@@ -113,12 +113,22 @@ import { SYNC_CONFIG } from '../constants';
               <p class="text-base font-semibold text-purple-700 mt-1 break-words text-center">
                 {{ registeredAttendee()?.company }}
               </p>
-              <div class="mt-5 flex justify-center">
-                <span class="inline-flex items-center gap-2 bg-yellow-100 text-yellow-800 text-xs font-bold px-4 py-1.5 rounded-full border border-yellow-300">
-                  <span class="w-2.5 h-2.5 rounded-full bg-yellow-500 ring-1 ring-yellow-600/20"></span>
-                  Yellow Lanyard
-                </span>
-              </div>
+              @if (registeredAttendee()?.lanyardColor) {
+                <div class="mt-5 flex flex-wrap justify-center gap-2">
+                  <span class="inline-flex items-center gap-2 bg-gray-100 text-gray-800 text-xs font-bold px-4 py-1.5 rounded-full border border-gray-300">
+                    <span class="w-2.5 h-2.5 rounded-full ring-1 ring-black/10"
+                          [style.backgroundColor]="lanyardDotColor(registeredAttendee()!.lanyardColor)"></span>
+                    {{ registeredAttendee()!.lanyardColor }} Lanyard
+                  </span>
+                  @if (registeredAttendee()?.nameCardColor) {
+                    <span class="inline-flex items-center gap-2 bg-gray-100 text-gray-800 text-xs font-bold px-4 py-1.5 rounded-full border border-gray-300">
+                      <span class="w-2.5 h-2.5 rounded-full ring-1 ring-black/10"
+                            [style.backgroundColor]="lanyardDotColor(registeredAttendee()!.nameCardColor)"></span>
+                      {{ registeredAttendee()!.nameCardColor }} Name Card
+                    </span>
+                  }
+                </div>
+              }
             </div>
 
             <button
@@ -150,7 +160,7 @@ export class WalkInPageComponent implements OnInit, OnDestroy {
   errorMessage = signal('');
   eventName    = signal('Event');
 
-  registeredAttendee = signal<{ fullName: string; company: string } | null>(null);
+  registeredAttendee = signal<{ fullName: string; company: string; lanyardColor: string; nameCardColor: string } | null>(null);
 
   private currentEvent: any = null;
 
@@ -218,7 +228,7 @@ export class WalkInPageComponent implements OnInit, OnDestroy {
 
     this.submitting.set(true);
 
-    const success = await this.dataService.addWalkInAttendee(
+    const result = await this.dataService.addWalkInAttendee(
       {
         fullName: capturedName,
         email:    capturedEmail,
@@ -236,12 +246,32 @@ export class WalkInPageComponent implements OnInit, OnDestroy {
 
     this.submitting.set(false);
 
-    if (success) {
-      this.registeredAttendee.set({ fullName: capturedName, company: capturedCompany });
+    if (result) {
+      this.registeredAttendee.set({
+        fullName:     capturedName,
+        company:      capturedCompany,
+        lanyardColor:  result.lanyardColor,
+        nameCardColor: result.nameCardColor,
+      });
       this.submitted.set(true);
     } else {
-      this.errorMessage.set('Failed to register. Please check your connection and try again.');
+      this.errorMessage.set('Failed to register. Please check your connection, or reach out to someone on the StackConnect desk.');
     }
+  }
+
+  lanyardDotColor(color: string): string {
+    const map: Record<string, string> = {
+      'yellow':        '#EAB308',
+      'green':         '#22C55E',
+      'red':           '#DC2626',
+      'crimson red':   '#DC2626',
+      'charcoal grey': '#4B5563',
+      'charcoal gray': '#4B5563',
+      'blue':          '#3B82F6',
+      'white':         '#E5E7EB',
+      'black':         '#111827',
+    };
+    return map[color.toLowerCase()] ?? '#A855F7';
   }
 
   reset() {

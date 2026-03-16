@@ -100,6 +100,12 @@ export class DataService {
    */
   public syncError = signal<string | null>(null);
 
+  /**
+   * Set when a read (loadFromBackend) fails or times out.
+   * Cleared automatically on the next successful read.
+   */
+  public connectionError = signal<string | null>(null);
+
   constructor() {
     this.loadEventsFromStorage();
     this.loadPendingSyncsFromStorage();
@@ -342,13 +348,13 @@ export class DataService {
     sheetUrlOverride?: string,
     defaultSpocValues?: { name?: string; email?: string; slack?: string },
     autoCheckIn: boolean = false
-  ): Promise<boolean> {
+  ): Promise<{ lanyardColor: string; nameCardColor: string } | false> {
     const sheet     = sheetUrlOverride || this.currentSheetUrl();
     const sheetName = this.sheetName();
 
     if (!this.SCRIPT_URL || !sheet) {
       console.error('Missing configuration: Script URL or Sheet URL');
-      return false;
+      return false as false;
     }
 
     const newId       = crypto.randomUUID();
@@ -413,7 +419,13 @@ export class DataService {
         );
       }
 
-      return res.status === 'success';
+      if (res.status === 'success') {
+        return {
+          lanyardColor:  res.updatedFields?.lanyardColor  || DEFAULT_LANYARD_COLOR,
+          nameCardColor: res.updatedFields?.nameCardColor || '',
+        };
+      }
+      return false;
     } catch (err) {
       console.error('Failed to add walk-in:', err);
       return false;
@@ -549,20 +561,25 @@ export class DataService {
     if (sheetName) this.sheetName.set(sheetName);
 
     if (!this.SCRIPT_URL || !sheetUrl) {
-      alert('Configuration error: Backend URL is not set. Check your .env file.');
+      this.connectionError.set('Configuration error: backend URL is not set. Check your .env file.');
       return false;
     }
+
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 15_000);
 
     try {
       const params = new URLSearchParams({ action: 'read', sheetUrl });
       if (sheetName) params.append('sheetName', sheetName);
 
-      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`);
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       const json = await this.safeJson(response);
 
       if (json.sheetName) this.sheetName.set(json.sheetName);
 
       if (json.attendees) {
+        this.connectionError.set(null);
         this.parseJsonData(json.attendees);
         // Re-apply any in-flight or queued optimistic changes on top of the
         // fresh backend snapshot so the UI never reverts while a sync is pending.
@@ -570,14 +587,19 @@ export class DataService {
         await this.flushPendingSyncs();
         return true;
       } else if (json.error) {
-        alert('Google Script Error: ' + json.error);
+        this.connectionError.set('Backend error: ' + json.error);
         return false;
       }
 
       return false;
-    } catch (err) {
+    } catch (err: any) {
+      clearTimeout(timeoutId);
       console.error('Fetch error:', err);
-      alert('Failed to connect to the backend. Please check your internet connection and try again.');
+      if (err?.name === 'AbortError') {
+        this.connectionError.set('Connection timed out. Try a better network or contact the StackConnect team for help.');
+      } else {
+        this.connectionError.set('Could not reach the backend. Check your internet connection or contact the StackConnect team for help.');
+      }
       return false;
     }
   }

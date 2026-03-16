@@ -565,37 +565,59 @@ function addWalkIn(sheet, data) {
 
     // ── SPOC LOOKUP FORMULA ──────────────────────────────────────────────────
     // If there are existing data rows, replace the literal default SPOC values
-    // with INDEX/MATCH formulas that look up the walk-in's company in all rows
-    // above the new row. If the company already exists, its SPOC is used;
-    // otherwise the formula falls back to the hardcoded default SPOC.
+    // with INDEX/MATCH formulas that look up the walk-in's email domain against
+    // existing attendees' email domains. Matching on domain (e.g. "acme.com")
+    // rather than company name avoids mismatches from spelling variations.
     //
     // Range intentionally excludes the new row itself (rows 2 → lastRowIndex)
     // to avoid a circular reference and to ensure we only match existing attendees.
     if (lastRowIndex > 1) {
-      const companyColIdx  = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'company' || hn === 'organization'; });
-      const spocNameColIdx = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc of the day' || hn === 'spoc name'; });
-      const spocEmailColIdx= headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc email' || hn === 'spoc_email'; });
-      const spocSlackColIdx= headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc slack' || hn === 'spoc_slack'; });
+      const emailColIdx      = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'email' || hn === 'e-mail'; });
+      const spocNameColIdx   = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc of the day' || hn === 'spoc name'; });
+      const spocEmailColIdx  = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc email' || hn === 'spoc_email'; });
+      const spocSlackColIdx  = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc slack' || hn === 'spoc_slack'; });
+      const lanyardColIdx    = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'colour of the lanyard' || hn === 'lanyard color' || hn === 'lanyardcolor'; });
+      const nameCardColIdx   = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'colour of name card' || hn === 'name card color' || hn === 'namecard color'; });
+      const domainColIdx     = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'domain'; });
 
-      if (companyColIdx > -1) {
-        const companyCol  = colToLetter(companyColIdx + 1);
-        const searchRange = companyCol + '$2:' + companyCol + lastRowIndex; // existing rows only
+      if (emailColIdx > -1) {
+        const emailCol    = colToLetter(emailColIdx + 1);
+        const emailCell   = emailCol + targetRow;                              // e.g. D755
+        const emailRange  = emailCol + '$2:' + emailCol + lastRowIndex;        // e.g. D$2:D754
+
+        // Extract the domain (everything after @) for a single cell and for the range.
+        const domainOf    = function (cellRef) {
+          return 'MID(' + cellRef + ',FIND("@",' + cellRef + ')+1,LEN(' + cellRef + '))';
+        };
+        const lookupKey   = domainOf(emailCell);
+        const lookupArray = 'ARRAYFORMULA(' + domainOf(emailRange) + ')';
 
         function spocFormula(valueColIdx, defaultVal) {
           if (valueColIdx === -1) return null;
-          const valueCol = colToLetter(valueColIdx + 1);
-          const lookupRange = valueCol + '$2:' + valueCol + lastRowIndex;
-          const safe = (defaultVal || '').replace(/"/g, '""'); // escape embedded quotes
-          return '=IFERROR(INDEX(' + lookupRange + ',MATCH(' + companyCol + targetRow + ',' + searchRange + ',0)),"' + safe + '")';
+          const valueCol    = colToLetter(valueColIdx + 1);
+          const valueRange  = valueCol + '$2:' + valueCol + lastRowIndex;
+          const safe        = (defaultVal || '').replace(/"/g, '""'); // escape embedded quotes
+          return '=IFERROR(INDEX(' + valueRange + ',MATCH(' + lookupKey + ',' + lookupArray + ',0)),"' + safe + '")';
         }
 
-        const nameFormula  = spocFormula(spocNameColIdx,  data.defaultSpocName);
-        const emailFormula = spocFormula(spocEmailColIdx, data.defaultSpocEmail);
-        const slackFormula = spocFormula(spocSlackColIdx, data.defaultSpocSlack);
+        const nameFormula    = spocFormula(spocNameColIdx,  data.defaultSpocName);
+        const emailFormula   = spocFormula(spocEmailColIdx, data.defaultSpocEmail);
+        const slackFormula   = spocFormula(spocSlackColIdx, data.defaultSpocSlack);
+        const lanyardFormula = spocFormula(lanyardColIdx,   'Yellow');
+        const nameCardFormula= spocFormula(nameCardColIdx,  'Yellow');
 
-        if (nameFormula  && spocNameColIdx  > -1) sheet.getRange(targetRow, spocNameColIdx  + 1).setFormula(nameFormula);
-        if (emailFormula && spocEmailColIdx > -1) sheet.getRange(targetRow, spocEmailColIdx + 1).setFormula(emailFormula);
-        if (slackFormula && spocSlackColIdx > -1) sheet.getRange(targetRow, spocSlackColIdx + 1).setFormula(slackFormula);
+        if (nameFormula     && spocNameColIdx  > -1) sheet.getRange(targetRow, spocNameColIdx  + 1).setFormula(nameFormula);
+        if (emailFormula    && spocEmailColIdx > -1) sheet.getRange(targetRow, spocEmailColIdx + 1).setFormula(emailFormula);
+        if (slackFormula    && spocSlackColIdx > -1) sheet.getRange(targetRow, spocSlackColIdx + 1).setFormula(slackFormula);
+        if (lanyardFormula  && lanyardColIdx   > -1) sheet.getRange(targetRow, lanyardColIdx   + 1).setFormula(lanyardFormula);
+        if (nameCardFormula && nameCardColIdx  > -1) sheet.getRange(targetRow, nameCardColIdx  + 1).setFormula(nameCardFormula);
+
+        // Domain lookup: match the walk-in's email against the Intel master sheet.
+        // Uses full column references since the external sheet size is unknown.
+        if (domainColIdx > -1) {
+          const domainFormula = '=IFERROR(INDEX(\'Import of Intel-Master_old\'!BB:BB,MATCH($' + emailCol + targetRow + ',\'Import of Intel-Master_old\'!$B:$B,0)),"")';
+          sheet.getRange(targetRow, domainColIdx + 1).setFormula(domainFormula);
+        }
       }
     }
 
@@ -617,8 +639,10 @@ function addWalkIn(sheet, data) {
     const updatedFields = {};
     headers.forEach(function (header, i) {
       const h = header.toString().toLowerCase().trim();
-      if (h === 'spoc of the day') updatedFields.spocName = writtenRow[i];
-      if (h === 'spoc email') updatedFields.spocEmail = writtenRow[i];
+      if (h === 'spoc of the day' || h === 'spoc name') updatedFields.spocName = writtenRow[i];
+      if (h === 'spoc email' || h === 'spoc_email') updatedFields.spocEmail = writtenRow[i];
+      if (h === 'colour of the lanyard' || h === 'lanyard color' || h === 'lanyardcolor') updatedFields.lanyardColor = String(writtenRow[i] || '');
+      if (h === 'colour of name card' || h === 'name card color' || h === 'namecard color') updatedFields.nameCardColor = String(writtenRow[i] || '');
     });
 
     return jsonResponse({ status: 'success', message: 'Walk-in registered', updatedFields: updatedFields });

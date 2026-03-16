@@ -85,6 +85,35 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
         </div>
       </header>
 
+      <!-- Connection Error Banner -->
+      @if (dataService.connectionError()) {
+        <div class="bg-amber-50 border-b border-amber-200 px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-3 text-sm">
+          <div class="flex items-center gap-2 text-amber-800">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <span class="font-medium">{{ dataService.connectionError() }}</span>
+          </div>
+          <button (click)="dataService.connectionError.set(null)"
+                  class="text-amber-600 hover:text-amber-800 p-1 flex-shrink-0"
+                  title="Dismiss">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      }
+
+      <!-- Pending Sync Warning Banner -->
+      @if (dataService.syncError()) {
+        <div class="bg-orange-50 border-b border-orange-200 px-4 sm:px-6 lg:px-8 py-2.5 flex items-center gap-2 text-sm text-orange-800">
+          <svg class="w-4 h-4 flex-shrink-0 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span class="font-medium">{{ dataService.syncError() }}</span>
+        </div>
+      }
+
       <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         
         <!-- Controls -->
