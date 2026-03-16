@@ -439,7 +439,7 @@ export class DataService {
    * On failure the payload is queued and retried on the next loadFromBackend call.
    * Sets syncError signal when there are unsynced pending changes.
    */
-  private async syncChangeToBackend(payload: any) {
+  private async syncChangeToBackend(payload: any, retries: number = 0) {
     const sheet     = this.currentSheetUrl();
     const sheetName = this.sheetName();
 
@@ -466,14 +466,14 @@ export class DataService {
       const result = await this.safeJson(response);
       if (result.status !== 'success') {
         console.warn('Sync returned non-success, queuing for retry:', result.error);
-        this.queuePendingSync(payload);
+        this.queuePendingSync(payload, retries);
       } else {
         if (this.pendingSyncs.length === 0) this.syncError.set(null);
       }
     } catch (err: any) {
       const reason = err?.name === 'AbortError' ? 'timed out' : 'network error';
       console.warn(`Sync ${reason}, queued for retry:`, payload);
-      this.queuePendingSync(payload);
+      this.queuePendingSync(payload, retries);
     }
   }
 
@@ -504,9 +504,9 @@ export class DataService {
     }
   }
 
-  private queuePendingSync(payload: any) {
+  private queuePendingSync(payload: any, retries: number = 0) {
     if (this.pendingSyncs.length < SYNC_CONFIG.MAX_PENDING_RETRIES * 10) {
-      this.pendingSyncs.push({ payload, retries: 0 });
+      this.pendingSyncs.push({ payload, retries });
       this.savePendingSyncs();
     }
     this.syncError.set('Some changes haven\'t synced yet. They will retry on the next refresh.');
@@ -521,15 +521,18 @@ export class DataService {
     if (this.pendingSyncs.length === 0) return;
     this.rawAttendees.update(attendees =>
       attendees.map(a => {
-        const pending = this.pendingSyncs.find(s => s.payload.email === a.email);
-        if (!pending) return a;
-        const p = pending.payload;
+        const allPending = this.pendingSyncs.filter(s => s.payload.email === a.email);
+        if (allPending.length === 0) return a;
+        // Merge all pending entries in queue order so the latest value for each
+        // field wins. This prevents an earlier unrelated change (e.g. lanyard
+        // colour) from blocking a later attendance toggle from being reapplied.
+        const merged = allPending.reduce((acc, s) => ({ ...acc, ...s.payload }), {} as any);
         return {
           ...a,
-          ...(p.attendance  !== undefined ? { attendance:   p.attendance,
-                                               checkInTime: p.attendance ? (a.checkInTime ?? new Date()) : null } : {}),
-          ...(p.lanyardColor !== undefined ? { lanyardColor: p.lanyardColor } : {}),
-          ...(p.notes        !== undefined ? { notes:        p.notes        } : {}),
+          ...(merged.attendance  !== undefined ? { attendance:   merged.attendance,
+                                                   checkInTime: merged.attendance ? (a.checkInTime ?? new Date()) : null } : {}),
+          ...(merged.lanyardColor !== undefined ? { lanyardColor: merged.lanyardColor } : {}),
+          ...(merged.notes        !== undefined ? { notes:        merged.notes        } : {}),
         };
       })
     );
@@ -547,7 +550,7 @@ export class DataService {
         console.error('Dropping sync after max retries:', item.payload);
         continue;
       }
-      await this.syncChangeToBackend({ ...item.payload, _retries: item.retries + 1 });
+      await this.syncChangeToBackend(item.payload, item.retries + 1);
     }
 
     if (this.pendingSyncs.length === 0) {
