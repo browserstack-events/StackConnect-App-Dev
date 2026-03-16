@@ -122,7 +122,7 @@ import { SYNC_CONFIG } from '../constants';
                   </span>
                   @if (registeredAttendee()?.nameCardColor) {
                     <span class="inline-flex items-center gap-2 bg-gray-100 text-gray-800 text-xs font-bold px-4 py-1.5 rounded-full border border-gray-300">
-                      <span class="w-2.5 h-2.5 rounded-full ring-1 ring-black/10"
+                      <span class="w-2.5 h-2.5 ring-1 ring-black/10"
                             [style.backgroundColor]="lanyardDotColor(registeredAttendee()!.nameCardColor)"></span>
                       {{ registeredAttendee()!.nameCardColor }} Name Card
                     </span>
