@@ -260,18 +260,17 @@ export class WalkInPageComponent implements OnInit, OnDestroy {
   }
 
   lanyardDotColor(color: string): string {
-    const map: Record<string, string> = {
-      'yellow':        '#EAB308',
-      'green':         '#22C55E',
-      'red':           '#DC2626',
-      'crimson red':   '#DC2626',
-      'charcoal grey': '#4B5563',
-      'charcoal gray': '#4B5563',
-      'blue':          '#3B82F6',
-      'white':         '#E5E7EB',
-      'black':         '#111827',
-    };
-    return map[color.toLowerCase()] ?? '#A855F7';
+    const c = color?.toLowerCase() || '';
+    if (c.includes('green'))                    return '#16a34a';
+    if (c.includes('yellow') || c.includes('gold'))  return '#ca8a04';
+    if (c.includes('red') || c.includes('crimson'))  return '#dc2626';
+    if (c.includes('blue'))                     return '#2563eb';
+    if (c.includes('purple') || c.includes('violet')) return '#9333ea';
+    if (c.includes('orange'))                   return '#ea580c';
+    if (c.includes('grey') || c.includes('gray'))    return '#4b5563';
+    if (c.includes('white'))                    return '#e5e7eb';
+    if (c.includes('black'))                    return '#111827';
+    return '#9ca3af';
   }
 
   reset() {
