@@ -407,11 +407,21 @@ export class DataService {
         attendeeType: 'Attendee'
       };
 
-      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`, {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      const res = await this.safeJson(response);
+      const attemptAdd = async () => {
+        const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        return this.safeJson(response);
+      };
+
+      let res = await attemptAdd();
+
+      // Single retry after a short delay if the backend lock was busy.
+      if (res.status === 'error' && res.error?.includes('busy')) {
+        await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.WALK_IN_RETRY_DELAY_MS));
+        res = await attemptAdd();
+      }
 
       if (this.currentSheetUrl() === sheet && res.status === 'success' && res.updatedFields) {
         this.rawAttendees.update(attendees =>

@@ -743,15 +743,21 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   async ngOnInit() {
     await this.initializeDashboard();
 
-    // Auto-sync interval — driven by SYNC_CONFIG.AUTO_SYNC_INTERVAL_MS
-    this.syncInterval = setInterval(() => {
-      this.syncData();
-    }, SYNC_CONFIG.AUTO_SYNC_INTERVAL_MS);
+    // Auto-sync interval with per-client jitter to stagger retries and avoid
+    // a thundering herd when multiple desk operators are online simultaneously.
+    const scheduleSync = () => {
+      const delay = SYNC_CONFIG.AUTO_SYNC_INTERVAL_MS + Math.random() * SYNC_CONFIG.SYNC_JITTER_MS;
+      this.syncInterval = setTimeout(() => {
+        this.syncData();
+        scheduleSync();
+      }, delay);
+    };
+    scheduleSync();
   }
 
   ngOnDestroy() {
     if (this.syncInterval) {
-      clearInterval(this.syncInterval);
+      clearTimeout(this.syncInterval);
     }
   }
 

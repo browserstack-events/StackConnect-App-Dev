@@ -20,10 +20,14 @@ export const STORAGE_KEYS = {
 export const SYNC_CONFIG = {
   /** Auto-refresh interval for the dashboard (ms) */
   AUTO_SYNC_INTERVAL_MS: 60_000,
+  /** Random jitter added to each dashboard sync tick to stagger retries across clients (ms) */
+  SYNC_JITTER_MS: 20_000,
   /** Timeout for fire-with-fallback backend sync calls (ms) */
   BACKEND_TIMEOUT_MS: 5_000,
   /** Maximum number of times a failed sync will be re-queued */
   MAX_PENDING_RETRIES: 3,
+  /** Delay before a walk-in registration is retried after a busy-lock failure (ms) */
+  WALK_IN_RETRY_DELAY_MS: 2_000,
   /** How often the role-selection page re-fetches event data to pick up SPOC changes (ms) */
   EVENT_REFRESH_INTERVAL_MS: 15 * 60 * 1000,
 } as const;
