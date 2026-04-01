@@ -61,7 +61,7 @@ jobs:
           echo "GAS URL injected successfully."
 
       - name: Build
-        run: npm run build -- --base-href /StackConnect-App/
+        run: npm run build -- --base-href /StackConnect-App-Dev/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
