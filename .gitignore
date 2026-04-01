@@ -29,3 +29,5 @@ backend.js
 *.njsproj
 *.sln
 *.sw?
+
+.claude
