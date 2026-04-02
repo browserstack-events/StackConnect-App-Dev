@@ -25,12 +25,12 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
   `],
   template: `
     @if (!showLoginOverlay()) {
-    <div class="min-h-screen flex flex-col bg-gray-50">
+    <div class="min-h-screen flex flex-col bg-gray-50 overflow-hidden">
       <!-- Top Navigation Bar -->
       <header class="border-b border-gray-200 sticky top-0 z-10 shadow-sm transition-colors"
               [class.bg-teal-600]="mode() === 'admin'"
               [class.bg-blue-600]="mode() === 'spoc'">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div class="flex items-center gap-4">
              <a [routerLink]="['/event', eventId()]" class="text-white/80 hover:text-white">
                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -114,7 +114,8 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
         </div>
       }
 
-      <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <main class="flex-1 overflow-y-auto w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 scroll-smooth">
+        </main>
         
         <!-- Controls -->
         <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col gap-4">

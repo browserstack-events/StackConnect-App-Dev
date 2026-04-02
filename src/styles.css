@@ -1,18 +1,42 @@
+/* src/styles.css */
 @import "tailwindcss";
+
+/* ... existing styles ... */
+
+@layer base {
+  html, body {
+    /* Prevent the bounce effect on mobile and lock height */
+    height: 100%;
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+  }
+}
+
+/* Tailwind v4 h-screen uses dvh by default, but we can be explicit */
+.h-screen {
+  height: 100dvh; /* Dynamic Viewport Height: accounts for keyboard/address bar */
+}
+
+
+
+
+/* @import "tailwindcss";
 
 /* Explicitly tell Tailwind v4 where to scan for utility class names.
    Automatic content detection doesn't reliably traverse inline Angular
    templates (.ts files) when running through @tailwindcss/postcss in
-   Angular's Vite-based dev server. */
-@source "./**/*.ts";
-@source "./**/*.html";
+   Angular's Vite-based dev server. 
+@source "./**.ts";
+@source "./**.html";
 
 body {
   font-family: 'Inter', sans-serif;
   background-color: #f3f4f6;
-}
+} */
 
 /* Custom scrollbar */
 ::-webkit-scrollbar        { width: 6px; }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background-color: #cbd5e1; border-radius: 20px; }
+
