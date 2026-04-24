@@ -1,8 +1,9 @@
-import { Component, inject, input, output, signal } from '@angular/core';
+import { Component, computed, inject, input, output, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Attendee } from '../services/data.service';
 import { AuthService } from '../services/auth.service';
+import { SpocAuthService } from '../services/spoc-auth.service';
 
 @Component({
   selector: 'app-attendee-detail',
@@ -272,13 +273,43 @@ import { AuthService } from '../services/auth.service';
                     <div class="space-y-3">
                       @for (note of parseNotes(); track $index) {
                         <div class="bg-blue-50 border border-blue-100 rounded-lg p-3">
-                          <div class="flex items-start gap-2 mb-1.5">
+                          <div class="flex items-start gap-2">
                             <div class="flex-shrink-0 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
                               {{ note.author.charAt(0).toUpperCase() }}
                             </div>
                             <div class="flex-1 min-w-0">
-                              <div class="text-xs font-semibold text-blue-900">{{ note.author }}</div>
-                              <p class="text-sm text-blue-800 mt-1 whitespace-pre-line break-words">{{ note.text }}</p>
+                              <div class="flex items-center justify-between gap-2">
+                                <div class="text-xs font-semibold text-blue-900">{{ note.author }}</div>
+                                @if (note.author === currentUser() && editingNoteIndex() !== $index) {
+                                  <button (click)="onEditNote($index, note.text)"
+                                          class="flex-shrink-0 p-1 rounded text-blue-400 hover:text-blue-700 hover:bg-blue-100 transition-colors">
+                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                      <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
+                                  </button>
+                                }
+                              </div>
+                              @if (editingNoteIndex() === $index) {
+                                <textarea
+                                  [value]="editingNoteText()"
+                                  (input)="editingNoteText.set($any($event.target).value)"
+                                  rows="3"
+                                  class="mt-1.5 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm resize-none bg-white px-2 py-1.5"
+                                  placeholder="Edit your note…"></textarea>
+                                <div class="flex gap-2 mt-2">
+                                  <button (click)="saveEditedNote()"
+                                          [disabled]="!editingNoteText().trim()"
+                                          class="flex-1 bg-blue-600 text-white text-xs font-semibold py-1.5 px-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    Save
+                                  </button>
+                                  <button (click)="cancelEditNote()"
+                                          class="flex-1 bg-white text-gray-600 border border-gray-300 text-xs font-semibold py-1.5 px-3 rounded-lg hover:bg-gray-50">
+                                    Cancel
+                                  </button>
+                                </div>
+                              } @else {
+                                <p class="text-sm text-blue-800 mt-1 whitespace-pre-line break-words">{{ note.text }}</p>
+                              }
                             </div>
                           </div>
                         </div>
@@ -334,12 +365,21 @@ export class AttendeeDetailComponent {
   updateNote = output<string>();
 
   authService = inject(AuthService);
+  spocAuthService = inject(SpocAuthService);
 
   isEditingNote = signal(false);
   noteText = signal('');
-  //Notes Management
+  // Notes Management
   isAddingNote = signal(false);
   newNoteText = signal('');
+  // Inline edit for own notes
+  editingNoteIndex = signal<number | null>(null);
+  editingNoteText  = signal<string>('');
+
+  /** Current user's display name — used to identify which notes can be edited. */
+  currentUser = computed(() =>
+    this.spocAuthService.user()?.name || this.authService.spocName() || 'SPOC'
+  );
 
   renderMarkdown(text: string): string {
     if (!text) return '';
@@ -396,11 +436,39 @@ export class AttendeeDetailComponent {
     this.newNoteText.set('');
   }
 
+  onEditNote(index: number, currentText: string) {
+    this.isAddingNote.set(false);
+    this.editingNoteIndex.set(index);
+    this.editingNoteText.set(currentText);
+  }
+
+  cancelEditNote() {
+    this.editingNoteIndex.set(null);
+    this.editingNoteText.set('');
+  }
+
+  saveEditedNote() {
+    const index = this.editingNoteIndex();
+    if (index === null) return;
+    const newText = this.editingNoteText().trim();
+    if (!newText) return;
+
+    const notes = this.parseNotes();
+    notes[index] = { ...notes[index], text: newText };
+
+    // Rebuild the full notes string preserving all other entries
+    const rebuilt = notes.map(n => `${n.author}: ${n.text}`).join('\n---\n');
+    this.updateNote.emit(rebuilt);
+
+    this.editingNoteIndex.set(null);
+    this.editingNoteText.set('');
+  }
+
   saveNewNote() {
     const noteText = this.newNoteText().trim();
     if (!noteText) return;
 
-    const authorName = this.authService.spocName() || 'SPOC';
+    const authorName = this.spocAuthService.user()?.name || this.authService.spocName() || 'SPOC';
 
     // Build author prefix
     const newEntry = `${authorName}: ${noteText}`;

@@ -239,7 +239,7 @@ export class WalkInPageComponent implements OnInit, OnDestroy {
       {
         name:  this.currentEvent.defaultSpocName,
         email: this.currentEvent.defaultSpocEmail,
-        slack: this.currentEvent.defaultSpocSlack
+        slack: this.currentEvent.defaultSlackMemberId
       },
       true // autoCheckIn: mark attendance + fire email notification immediately
     );

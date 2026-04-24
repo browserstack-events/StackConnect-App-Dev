@@ -4,6 +4,7 @@ import { LandingPageComponent } from './components/landing-page.component';
 import { RoleSelectionComponent } from './components/role-selection.component';
 import { SpocDashboardComponent } from './components/spoc-dashboard.component';
 import { WalkInPageComponent } from './components/walk-in-page.component';
+import { AuthCallbackComponent } from './components/auth-callback.component';
 import { walkinGuard } from './guards/role-guard';
 
 /**
@@ -63,6 +64,13 @@ export const routes: Routes = [
     path: 'event/:id/spoc',
     component: SpocDashboardComponent,
     data: { mode: 'spoc' }
+    // Auth is handled by the login overlay in SpocDashboardComponent.
+    // The spocOauthGuard is intentionally removed so the user sees the
+    // login UI before being redirected to BrowserStack.
+  },
+  {
+    path: 'auth/callback',
+    component: AuthCallbackComponent
   },
   {
     path: 'register/:id',

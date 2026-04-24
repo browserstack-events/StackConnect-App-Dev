@@ -1,16 +1,18 @@
-import { Component, inject, signal, computed, input, OnInit, OnDestroy, effect } from '@angular/core';
+import { Component, inject, signal, computed, input, OnInit, OnDestroy, effect, viewChildren } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterModule } from '@angular/router';
 import { DataService, Attendee } from '../services/data.service';
 import { AttendeeDetailComponent } from './attendee-detail.component';
 import { AuthService } from '../services/auth.service';
+import { SpocAuthService } from '../services/spoc-auth.service';
 import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
+import { SwipeableCardDirective } from '../directives/swipeable-card.directive';
 
 @Component({
   selector: 'app-spoc-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule, AttendeeDetailComponent, RouterModule],
+  imports: [CommonModule, FormsModule, AttendeeDetailComponent, RouterModule, SwipeableCardDirective],
   styles: [`
     @keyframes overlayFadeIn {
       from { opacity: 0; }
@@ -20,8 +22,13 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
       from { opacity: 0; transform: translateY(16px) scale(0.97); }
       to   { opacity: 1; transform: translateY(0)   scale(1);    }
     }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
     .overlay-enter { animation: overlayFadeIn 0.2s ease-out forwards; }
     .modal-enter   { animation: modalSlideUp  0.25s cubic-bezier(0.16,1,0.3,1) forwards; }
+    .animate-fade-in { animation: fadeIn 0.15s ease-in forwards; }
   `],
   template: `
     @if (!showLoginOverlay()) {
@@ -49,9 +56,14 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
             <!-- Auth User Display & Sign-Out -->
             <div class="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-lg border border-white/20">
               <div class="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-xs">
-                {{ (authService.displayName() || 'U').charAt(0).toUpperCase() }}
+                {{ displayInitial() }}
               </div>
-              <span class="text-sm text-white font-medium hidden sm:block">{{ authService.displayName() }}</span>
+              <div class="hidden sm:flex flex-col leading-tight">
+                <span class="text-sm text-white font-medium">{{ displayName() }}</span>
+                @if (mode() === 'spoc' && spocAuth.user()?.email) {
+                  <span class="text-xs text-white/60">{{ spocAuth.user()!.email }}</span>
+                }
+              </div>
               <button
                 (click)="signOut()"
                 class="text-white/70 hover:text-white p-1 transition-colors ml-1"
@@ -114,7 +126,8 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
         </div>
       }
 
-      <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 overflow-y-auto"
+            (scroll)="onListScroll($event)">
         
         <!-- Controls -->
         <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col gap-4">
@@ -126,11 +139,13 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
              </div>
-             <input 
-               type="text" 
+             <input
+               type="text"
                [ngModel]="searchQuery()"
                (ngModelChange)="searchQuery.set($event)"
-               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-gray-50 placeholder-gray-500 focus:outline-none focus:bg-white focus:ring-1 sm:text-sm" 
+               (focus)="onSearchFocus()"
+               (blur)="onSearchBlur()"
+               class="spoc-search-input block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-gray-50 placeholder-gray-500 focus:outline-none focus:bg-white focus:ring-1 sm:text-sm"
                [class.focus:ring-teal-500]="mode() === 'admin'"
                [class.focus:border-teal-500]="mode() === 'admin'"
                [class.focus:ring-blue-500]="mode() === 'spoc'"
@@ -138,8 +153,11 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                placeholder="Search by name, company, or email...">
           </div>
 
-          <!-- Filters Row -->
-          <div class="flex flex-col md:flex-row gap-3 items-center justify-between">
+          <!-- Filters Row (collapses when search is active) -->
+          <div class="overflow-hidden transition-all duration-300"
+               [style.max-height]="searchActive() ? '0px' : '400px'"
+               [style.opacity]="searchActive() ? '0' : '1'">
+            <div class="flex flex-col md:flex-row gap-3 items-center justify-between">
              
              <!-- SPOC Dropdown (Only for SPOC view) -->
              @if (mode() === 'spoc') {
@@ -211,10 +229,15 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                   Add Walk-in
                </button>
              }
+            </div>
           </div>
         </div>
 
-        <!-- Stats - Only show for SPOC and Desktop Admin view -->
+        <!-- Stats - Only show for SPOC and Desktop Admin view (collapses when search is active) -->
+        <div class="overflow-hidden transition-all duration-300"
+             [style.max-height]="searchActive() ? '0px' : '300px'"
+             [style.opacity]="searchActive() ? '0' : '1'"
+             [style.margin-top]="searchActive() ? '0px' : null">
         @if (mode() === 'spoc' || mode() === 'admin') {
           <div class="gap-4" 
                [ngClass]="mode() === 'admin' ? 'grid grid-cols-3 md:grid-cols-4' : 'grid grid-cols-3 md:grid-cols-4'">
@@ -237,11 +260,13 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
             </div>
           </div>
         }
+        </div>
 
 
 
         <!-- DESKTOP TABLE VIEW (Hidden on Mobile) -->
-        <div class="hidden md:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div class="hidden md:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
+             [style.margin-top]="searchActive() ? '0px' : null">
           <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
               <thead class="bg-gray-50">
@@ -273,9 +298,20 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                   <!-- Explicit Group Header -->
                   <tr class="bg-gray-50 border-b border-gray-200">
                     <td [attr.colspan]="mode() === 'spoc' ? 6 : 5" class="px-6 py-2.5">
-                      <div class="flex items-center gap-2">
-                         <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">{{ group.name }}</span>
-                         <span class="text-[10px] font-semibold text-gray-400 bg-white border border-gray-200 px-1.5 rounded-full">{{ group.items.length }}</span>
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">{{ group.name }}</span>
+                          <span class="text-[10px] font-semibold text-gray-400 bg-white border border-gray-200 px-1.5 rounded-full">{{ group.items.length }}</span>
+                        </div>
+                        @if (mode() === 'spoc') {
+                          <button (click)="openAccountNote(group.name)"
+                                  class="p-1 rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                  title="Add note for all {{ group.name }} attendees">
+                            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        }
                       </div>
                     </td>
                   </tr>
@@ -420,20 +456,78 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
         </div>
 
         <!-- MOBILE GROUPED CARD VIEW (Visible on Mobile) -->
-<div class="md:hidden space-y-6">
+<div class="md:hidden space-y-6"
+             [style.margin-top]="searchActive() ? '0px' : null">
           @for (group of groupedAttendees(); track group.name) {
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center sticky top-0 z-0">
-                  <span class="font-bold text-gray-700 text-sm uppercase tracking-wide">{{ group.name }}</span>
-                  <span class="text-xs font-semibold text-gray-500 bg-white border border-gray-200 px-2 py-0.5 rounded-full">{{ group.items.length }}</span>
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="font-bold text-gray-700 text-sm uppercase tracking-wide truncate">{{ group.name }}</span>
+                    <span class="text-xs font-semibold text-gray-500 bg-white border border-gray-200 px-2 py-0.5 rounded-full flex-shrink-0">{{ group.items.length }}</span>
+                  </div>
+                  @if (mode() === 'spoc') {
+                    <button (click)="openAccountNote(group.name)"
+                            class="ml-2 flex-shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                            title="Add note for all {{ group.name }} attendees">
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                  }
                </div>
 
                @for (attendee of group.items; track attendee.id; let last = $last) {
-                  <div class="relative p-4 flex items-center justify-between group transition-colors hover:bg-gray-50"
+                  <!-- Swipe-to-reveal wrapper -->
+                  <div class="relative overflow-hidden"
                        [class.border-b]="!last"
-                       [class.border-gray-100]="!last"
+                       [class.border-gray-100]="!last">
+
+                    <!-- LEFT panel — revealed on right swipe -->
+                    <div class="absolute inset-y-0 left-0 flex flex-col items-center justify-center w-[108px]"
+                         [style.backgroundColor]="getSwipePanelColor(attendee.id, 'left')">
+                      <svg class="w-6 h-6 flex-shrink-0"
+                           [style.opacity]="getSwipePanelProgress(attendee.id, 'left') * 1.5"
+                           [style.color]="getSwipePanelProgress(attendee.id, 'left') > 0.5 ? 'white' : '#2563eb'"
+                           fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      @if (getSwipePanelProgress(attendee.id, 'left') > 0.6) {
+                        <span class="text-[9px] font-bold uppercase tracking-wide mt-0.5 animate-fade-in"
+                              [style.color]="getSwipePanelProgress(attendee.id, 'left') > 0.5 ? 'white' : '#2563eb'">Note</span>
+                      }
+                    </div>
+
+                    <!-- RIGHT panel — revealed on left swipe -->
+                    <div class="absolute inset-y-0 right-0 flex flex-col items-center justify-center w-[108px]"
+                         [style.backgroundColor]="getSwipePanelColor(attendee.id, 'right')">
+                      <svg class="w-6 h-6 flex-shrink-0"
+                           [style.opacity]="getSwipePanelProgress(attendee.id, 'right') * 1.5"
+                           [style.color]="getSwipePanelProgress(attendee.id, 'right') > 0.5 ? 'white' : '#2563eb'"
+                           fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      @if (getSwipePanelProgress(attendee.id, 'right') > 0.6) {
+                        <span class="text-[9px] font-bold uppercase tracking-wide mt-0.5 animate-fade-in"
+                              [style.color]="getSwipePanelProgress(attendee.id, 'right') > 0.5 ? 'white' : '#2563eb'">Note</span>
+                      }
+                    </div>
+
+                  <!-- Sliding card — inline backgroundColor beats static Tailwind class conflict -->
+                  <div appSwipeableCard [revealWidth]="108" [threshold]="0.35"
+                       (swipeReveal)="onCardSwiped(attendee.id)"
+                       (swipeProgress)="onSwipeProgress(attendee.id, $event)"
+                       class="relative p-4 flex items-center justify-between group transition-colors hover:bg-gray-50"
+                       [style.backgroundColor]="attendee.attendance ? '#f0fdf4' : 'white'"
                        [class.cursor-pointer]="mode() === 'spoc'"
                        (click)="mode() === 'spoc' ? openDetail(attendee) : null">
+                       <!-- Swipe affordance hint -->
+                       @if (mode() === 'spoc') {
+                         <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-20 pointer-events-none">
+                           <svg class="w-3 h-3 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                           </svg>
+                         </div>
+                       }
                        
                        <div class="flex flex-col gap-1.5 min-w-0 flex-1 mr-3">
                           
@@ -536,7 +630,8 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                             {{ attendee.checkInTime ? (attendee.checkInTime | date:'shortTime') : '' }}
                           </span>
                        </div>
-                  </div>
+                  </div><!-- end sliding card -->
+                  </div><!-- end swipe wrapper -->
                }
             </div>
           } @empty {
@@ -550,7 +645,7 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
 
       <!-- Detail Modal -->
       @if (selectedAttendee()) {
-        <app-attendee-detail 
+        <app-attendee-detail
           [attendee]="selectedAttendee()!"
           [isAdmin]="mode() === 'admin'"
           [availableColors]="uniqueLanyardColors()"
@@ -558,6 +653,108 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
           (updateAttendance)="handleAttendanceToggle(selectedAttendee()!.id)"
           (updateNote)="handleNoteUpdate(selectedAttendee()!.id, $event)"
           (close)="closeDetail()" />
+      }
+
+      <!-- Quick Note Popup -->
+      @if (quickNoteTarget()) {
+        <div class="fixed inset-0 z-50 flex items-center justify-center p-4 overlay-enter"
+             (click)="closeQuickNote()">
+          <div class="absolute inset-0 bg-slate-900/70 backdrop-blur-md"></div>
+
+          <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden modal-enter"
+               (click)="$event.stopPropagation()">
+
+            <!-- Accent strip -->
+            <div class="h-1 w-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500"></div>
+
+            <div class="p-5">
+
+              <!-- Header -->
+              <div class="flex items-start justify-between mb-4">
+                <div>
+                  <h2 class="text-base font-bold text-gray-900">Add Note</h2>
+                  <p class="text-xs text-gray-500 mt-0.5">
+                    @if (quickNoteAccountLabel()) {
+                      All attendees from <span class="font-semibold text-gray-700">{{ quickNoteAccountLabel() }}</span>
+                    } @else {
+                      {{ quickNoteAttendeeName() }}
+                    }
+                  </p>
+                </div>
+                <button (click)="closeQuickNote()"
+                        class="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors -mt-0.5">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Account broadcast banner -->
+              @if (quickNoteAccountLabel()) {
+                <div class="mb-4 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
+                  <svg class="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p class="text-xs text-amber-800">This note will be added to all attendees under this account.</p>
+                </div>
+              }
+
+              <!-- Existing notes preview (attendee mode only) -->
+              @if (quickNoteExistingNotes().length > 0) {
+                <div class="mb-4 max-h-32 overflow-y-auto space-y-2 rounded-xl bg-gray-50 border border-gray-200 p-3">
+                  @for (entry of quickNoteExistingNotes(); track $index) {
+                    <div class="text-xs">
+                      <span class="font-semibold text-gray-700">{{ entry.author }}:</span>
+                      <span class="text-gray-600 ml-1">{{ entry.text }}</span>
+                    </div>
+                    @if (!$last) {
+                      <hr class="border-gray-200">
+                    }
+                  }
+                </div>
+              }
+
+              <!-- Textarea -->
+              <textarea
+                class="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 placeholder-gray-400
+                       focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-colors"
+                rows="4"
+                placeholder="Type your note…"
+                maxlength="1000"
+                [value]="quickNoteText()"
+                (input)="quickNoteText.set($any($event.target).value)"
+                autofocus>
+              </textarea>
+
+              <!-- Character counter -->
+              <div class="flex justify-end mt-1 mb-4">
+                <span class="text-xs transition-colors"
+                      [class.text-gray-400]="quickNoteText().length <= 800"
+                      [class.text-amber-600]="quickNoteText().length > 800 && quickNoteText().length <= 1000"
+                      [class.font-semibold]="quickNoteText().length > 800">
+                  {{ quickNoteText().length }}/1000
+                  @if (quickNoteText().length > 800) {
+                    — approaching limit
+                  }
+                </span>
+              </div>
+
+              <!-- Actions -->
+              <div class="flex gap-3">
+                <button (click)="closeQuickNote()"
+                        class="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                  Cancel
+                </button>
+                <button (click)="saveQuickNote()"
+                        [disabled]="!quickNoteText().trim()"
+                        class="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                  Save Note
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
       }
 
     </div>
@@ -604,81 +801,77 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
                 <p class="text-sm text-slate-500 mt-0.5">
                   {{ mode() === 'admin'
                       ? 'Enter the desk passphrase to continue'
-                      : 'Enter your name and passphrase to continue' }}
+                      : 'Sign in with your BrowserStack account to continue' }}
                 </p>
               </div>
             </div>
 
-            <!-- Form fields -->
-            <div class="space-y-3">
+            <!-- ── SPOC mode: BrowserStack OAuth button ── -->
+            @if (mode() === 'spoc') {
+              <div class="space-y-3">
+                <button
+                  (click)="loginWithBrowserStack()"
+                  class="w-full py-3 px-4 rounded-xl text-white text-sm font-bold tracking-wide transition-all
+                         flex items-center justify-center gap-3 shadow-sm active:scale-95
+                         bg-blue-600 hover:bg-blue-700">
+                  <img src="https://browserstack.wpenginepowered.com/wp-content/themes/browserstack/img/favicons/apple-touch-icon.png" alt="" class="w-5 h-5">
+                  Continue with BrowserStack
+                </button>
+                <p class="text-center text-xs text-slate-400 pt-1">
+                  BrowserStack employees only &middot; You'll be redirected to sign in
+                </p>
+              </div>
+            }
 
-              <!-- SPOC name (SPOC variant only) -->
-              @if (mode() === 'spoc') {
+            <!-- ── Desk mode: passphrase form (unchanged) ── -->
+            @if (mode() === 'admin') {
+              <div class="space-y-3">
+
+                <!-- Passphrase -->
                 <div class="relative">
                   <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                       <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                     </svg>
                   </div>
-                  <input type="text"
-                         [ngModel]="loginSpocName()"
-                         (ngModelChange)="loginSpocName.set($event)"
-                         placeholder="Your Name"
-                         autocomplete="name"
-                         class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
+                  <input type="password"
+                         [ngModel]="loginPassphrase()"
+                         (ngModelChange)="loginPassphrase.set($event)"
+                         placeholder="Passphrase"
+                         autocomplete="current-password"
+                         (keyup.enter)="submitLogin()"
+                         class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
                 </div>
-              }
 
-              <!-- Passphrase -->
-              <div class="relative">
-                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                          d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                  </svg>
-                </div>
-                <input type="password"
-                       [ngModel]="loginPassphrase()"
-                       (ngModelChange)="loginPassphrase.set($event)"
-                       placeholder="Passphrase"
-                       autocomplete="current-password"
-                       (keyup.enter)="submitLogin()"
-                       class="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 transition-all focus:border-transparent"
-                       [class.focus:ring-teal-500]="mode() === 'admin'"
-                       [class.focus:ring-blue-500]="mode() === 'spoc'" />
-              </div>
-
-              <!-- Error banner -->
-              @if (loginError()) {
-                <div class="flex items-center gap-2.5 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">
-                  <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  {{ loginError() }}
-                </div>
-              }
-
-              <!-- Submit -->
-              <button (click)="submitLogin()"
-                      [disabled]="isLoggingIn()"
-                      class="w-full mt-1 py-3 rounded-xl text-white text-sm font-bold tracking-wide transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm active:scale-95"
-                      [class.bg-teal-600]="mode() === 'admin'"
-                      [class.hover:bg-teal-700]="mode() === 'admin' && !isLoggingIn()"
-                      [class.bg-blue-600]="mode() === 'spoc'"
-                      [class.hover:bg-blue-700]="mode() === 'spoc' && !isLoggingIn()">
-                @if (isLoggingIn()) {
-                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Verifying…
-                } @else {
-                  Access Dashboard
+                <!-- Error banner -->
+                @if (loginError()) {
+                  <div class="flex items-center gap-2.5 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">
+                    <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {{ loginError() }}
+                  </div>
                 }
-              </button>
 
-            </div>
+                <!-- Submit -->
+                <button (click)="submitLogin()"
+                        [disabled]="isLoggingIn()"
+                        class="w-full mt-1 py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold tracking-wide transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm active:scale-95">
+                  @if (isLoggingIn()) {
+                    <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Verifying…
+                  } @else {
+                    Access Dashboard
+                  }
+                </button>
+
+              </div>
+            }
+
           </div>
         </div>
       </div>
@@ -688,6 +881,7 @@ import { SYNC_CONFIG, LANYARD_COLORS_FALLBACK } from '../constants';
 export class SpocDashboardComponent implements OnInit, OnDestroy {
   dataService = inject(DataService);
   authService = inject(AuthService);
+  spocAuth    = inject(SpocAuthService);
   router = inject(Router);
 
   // Inputs mapped from Route Data/Params
@@ -707,35 +901,79 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   searchQuery  = signal<string>('');
   isSyncing    = signal<boolean>(false);
   selectedAttendee = signal<Attendee | null>(null);
+  searchFocused = signal<boolean>(false);
+  searchActive = computed(() => this.searchFocused());
+
+  // Quick Notes state
+  quickNoteTarget = signal<{ attendeeId: string } | { accountName: string } | null>(null);
+  quickNoteText   = signal<string>('');
+  swipeProgress = signal<Map<string, { progress: number; offset: number }>>(new Map());
+
+  /** Resolved author name for note attribution — OAuth name takes precedence over passphrase name */
+  currentAuthor = computed(() =>
+    this.spocAuth.user()?.name || this.authService.spocName() || 'SPOC'
+  );
+
+  quickNoteAccountLabel = computed(() => {
+    const t = this.quickNoteTarget();
+    return t && 'accountName' in t ? t.accountName : null;
+  });
+
+  quickNoteAttendeeName = computed(() => {
+    const t = this.quickNoteTarget();
+    if (!t || !('attendeeId' in t)) return null;
+    return this.allAttendees().find(a => a.id === t.attendeeId)?.fullName ?? null;
+  });
+
+  quickNoteExistingNotes = computed((): Array<{ author: string; text: string }> => {
+    const t = this.quickNoteTarget();
+    if (!t || !('attendeeId' in t)) return [];
+    const raw = this.allAttendees().find(a => a.id === t.attendeeId)?.notes || '';
+    if (!raw.trim()) return [];
+    return raw.split('\n---\n').filter(e => e.trim()).map(entry => {
+      const colon = entry.indexOf(':');
+      if (colon === -1) return { author: 'Unknown', text: entry.trim() };
+      return { author: entry.substring(0, colon).trim(), text: entry.substring(colon + 1).trim() };
+    });
+  });
 
 
   allAttendees = this.dataService.getAttendees();
 
+  /** Name shown in the header — OAuth user name for SPOC mode, passphrase session name for desk */
+  displayName = computed(() =>
+    this.mode() === 'spoc'
+      ? (this.spocAuth.user()?.name || 'BrowserStack User')
+      : (this.authService.displayName() || 'Desk')
+  );
+
+  /** Avatar initial */
+  displayInitial = computed(() => (this.displayName().charAt(0) || 'U').toUpperCase());
+
   private syncInterval: any;
 
   constructor() {
-    // If we have an open modal (selectedAttendee), and the data refreshes from the backend (allAttendees),
-    // we need to re-bind the selectedAttendee to the new object in the array to ensure
-    // that any actions (like edits or status toggles) use the freshest object reference.
-    // This also handles the case where IDs might be regenerated by the backend parser.
+    // Re-bind selectedAttendee to the freshest backend object after each sync.
     effect(() => {
       const all = this.allAttendees();
       const selected = this.selectedAttendee();
 
       if (selected && all.length > 0) {
-        // Try to find the same attendee in the new list
-        // First by ID (if stable)
         let match = all.find(a => a.id === selected.id);
-
-        // Fallback to email if ID changed (e.g. parser regeneration)
         if (!match && selected.email) {
           match = all.find(a => a.email.toLowerCase() === selected.email.toLowerCase());
         }
-
         if (match && match !== selected) {
-          // Update the reference silently so the modal stays open with fresh data
           this.selectedAttendee.set(match);
         }
+      }
+    });
+
+    // Reactively show the login overlay if the SPOC session is cleared externally
+    // (e.g. by DataService detecting an auth error from the backend).
+    effect(() => {
+      if (this.mode() === 'spoc' && !this.spocAuth.isLoggedIn()) {
+        this.showLoginOverlay.set(true);
       }
     });
   }
@@ -762,15 +1000,28 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   }
 
   async initializeDashboard() {
-    const requiredRole = this.mode() === 'admin' ? 'desk' : 'spoc';
+    if (this.mode() === 'spoc') {
+      // SPOC mode: BrowserStack OAuth. Show the login overlay if no valid session.
+      if (!this.spocAuth.isAuthenticated()) {
+        this.showLoginOverlay.set(true);
+        return;
+      }
+      await this.loadDashboardData();
+      return;
+    }
 
-    // Show login overlay if no valid session — data fetch is deferred until after login
-    if (!this.authService.hasValidSession(requiredRole)) {
+    // Desk mode: existing passphrase overlay flow — unchanged
+    if (!this.authService.hasValidSession('desk')) {
       this.showLoginOverlay.set(true);
       return;
     }
 
     await this.loadDashboardData();
+  }
+
+  loginWithBrowserStack(): void {
+    const returnUrl = `/event/${this.eventId()}/spoc`;
+    this.spocAuth.startLogin(returnUrl);
   }
 
   async loadDashboardData() {
@@ -819,6 +1070,14 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   }
 
   signOut() {
+    if (this.mode() === 'spoc') {
+      // OAuth session — clear it and navigate back to role selection.
+      // The spocOauthGuard will re-trigger BrowserStack login on next visit.
+      this.spocAuth.logout();
+      this.showLoginOverlay.set(true);
+      return;
+    }
+    // Desk mode: clear passphrase session and show overlay
     this.authService.logout();
     this.showLoginOverlay.set(true);
     this.loginPassphrase.set('');
@@ -934,10 +1193,12 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
   });
 
   openDetail(attendee: Attendee) {
+    this.closeQuickNote();
     this.selectedAttendee.set(attendee);
   }
 
   closeDetail() {
+    this.closeQuickNote();
     this.selectedAttendee.set(null);
   }
 
@@ -964,6 +1225,114 @@ export class SpocDashboardComponent implements OnInit, OnDestroy {
     this.dataService.updateNote(id, note);
     const updated = this.allAttendees().find(a => a.id === id);
     if (updated) this.selectedAttendee.set(updated);
+  }
+
+  // ── Quick Notes ─────────────────────────────────────────────────────────────
+
+  swipeCards = viewChildren(SwipeableCardDirective);
+
+  openAttendeeNote(attendeeId: string) {
+    this.closeDetail();
+    this.quickNoteText.set('');
+    this.quickNoteTarget.set({ attendeeId });
+  }
+
+  openAccountNote(accountName: string) {
+    this.swipeCards().forEach(d => d.reset());
+    this.quickNoteText.set('');
+    this.quickNoteTarget.set({ accountName });
+  }
+
+  /**
+   * Called when a card is swiped past the threshold.
+   * Opens the notes popup directly (Gmail/Mail style).
+   * Does NOT reset swipe state — the card stays open behind the modal.
+   */
+  onCardSwiped(attendeeId: string) {
+    if (this.mode() === 'spoc') {
+      this.openAttendeeNote(attendeeId);
+    }
+  }
+
+  /** Updates swipe progress and offset for a card (called on every touchmove). */
+  onSwipeProgress(attendeeId: string, event: { progress: number; offset: number }) {
+    this.swipeProgress.update(map => {
+      const next = new Map(map);
+      next.set(attendeeId, event);
+      return next;
+    });
+  }
+
+  /** Progress (0-1) for a specific side: 'left' panel activates on right swipe, 'right' on left swipe. */
+  getSwipePanelProgress(attendeeId: string, panel: 'left' | 'right'): number {
+    const state = this.swipeProgress().get(attendeeId);
+    if (!state) return 0;
+    if (panel === 'right' && state.offset < 0) return state.progress;  // card moved left → right panel visible
+    if (panel === 'left'  && state.offset > 0) return state.progress;  // card moved right → left panel visible
+    return 0;
+  }
+
+  /**
+   * Converts panel progress (0-1) into a background color.
+   * Interpolates from blue-50 (#eff6ff) → SPOC blue-600 (#2563eb).
+   */
+  getSwipePanelColor(attendeeId: string, panel: 'left' | 'right'): string {
+    const p = this.getSwipePanelProgress(attendeeId, panel);
+    const lr = 239, lg = 246, lb = 255;   // blue-50
+    const dr = 37,  dg = 99,  db = 235;   // blue-600
+    const r = Math.round(lr + (dr - lr) * p);
+    const g = Math.round(lg + (dg - lg) * p);
+    const b = Math.round(lb + (db - lb) * p);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  closeQuickNote() {
+    this.quickNoteTarget.set(null);
+    this.quickNoteText.set('');
+    // Reset any swiped cards when closing the popup
+    this.swipeCards().forEach(d => d.reset());
+  }
+
+  saveQuickNote() {
+    const text = this.quickNoteText().trim();
+    if (!text) return;
+
+    const author = this.currentAuthor();
+    const target = this.quickNoteTarget();
+    if (!target) return;
+
+    if ('attendeeId' in target) {
+      const attendee = this.allAttendees().find(a => a.id === target.attendeeId);
+      if (!attendee) return;
+      const entry  = `${author}: ${text}`;
+      const existing = attendee.notes || '';
+      const updated = existing.trim() ? `${entry}\n---\n${existing}` : entry;
+      this.dataService.updateNote(target.attendeeId, updated);
+    } else {
+      this.dataService.updateNoteForAccount(target.accountName, author, text);
+    }
+
+    this.closeQuickNote();
+  }
+
+  // ── Keyboard Collapse ───────────────────────────────────────────────────────
+
+  onSearchFocus() {
+    this.searchFocused.set(true);
+  }
+
+  onSearchBlur() {
+    this.searchFocused.set(false);
+  }
+
+  onListScroll(event: Event) {
+    // Auto-dismiss keyboard on list scroll (only on mobile)
+    if (window.innerWidth < 768) {  // md breakpoint
+      const searchInput = document.querySelector('.spoc-search-input') as HTMLInputElement;
+      if (searchInput && document.activeElement === searchInput) {
+        searchInput.blur();
+      }
+    }
   }
 
   openWalkIn() {

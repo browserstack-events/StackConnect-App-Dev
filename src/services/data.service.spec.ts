@@ -39,7 +39,7 @@ const alice = {
   checkInTime: null,
   spocName: '',
   spocEmail: '',
-  spocSlack: '',
+  slackMemberId: '',
   printStatus: '',
   leadIntel: '',
   notes: '',

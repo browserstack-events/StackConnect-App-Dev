@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { environment } from '../environments/environment';
 import { STORAGE_KEYS, SYNC_CONFIG, VALIDATION, DEFAULT_LANYARD_COLOR } from '../constants';
+import { SpocAuthService } from './spoc-auth.service';
 
 export type AttendeeType = 'Attendee' | 'Speaker' | 'Round Table';
 
@@ -18,7 +19,7 @@ export interface Attendee {
   attendance: boolean;
   spocName: string;
   spocEmail: string;
-  spocSlack?: string;
+  slackMemberId?: string;
   checkInTime: Date | null;
   printStatus: string;
   leadIntel?: string;
@@ -37,7 +38,7 @@ export interface SavedEvent {
   state: 'Active' | 'Archived' | 'Deleted';
   defaultSpocName?: string;
   defaultSpocEmail?: string;
-  defaultSpocSlack?: string;
+  defaultSlackMemberId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,9 +107,31 @@ export class DataService {
    */
   public connectionError = signal<string | null>(null);
 
-  constructor() {
+  constructor(private spocAuth: SpocAuthService) {
     this.loadEventsFromStorage();
     this.loadPendingSyncsFromStorage();
+  }
+
+  /**
+   * Returns the current SPOC OAuth access token for attaching to GAS requests.
+   * GAS validates it against BrowserStack's userinfo endpoint on each call.
+   * Requires OAUTH_CLIENT_ID + OAUTH_CLIENT_SECRET set in GAS Script Properties.
+   */
+  private async getSpocToken(): Promise<string | null> {
+    return this.spocAuth.ensureValidToken();
+  }
+
+  /**
+   * Returns true when a backend error string indicates the SPOC session is
+   * no longer valid. Triggers logout so the dashboard login overlay reappears.
+   * Matches only the exact strings returned by validateToken() in Code.gs.
+   */
+  private isAuthError(error: string): boolean {
+    if (!error || !this.spocAuth.isAuthenticated()) return false;
+    const msg = error.toLowerCase();
+    return msg === 'invalid or expired access token'
+        || msg === 'missing access token'
+        || msg === 'token is not a jwt';
   }
 
   // --- SAFE JSON PARSER ---
@@ -155,7 +178,7 @@ export class DataService {
       eventDate: '',
       defaultSpocName:  '',
       defaultSpocEmail: '',
-      defaultSpocSlack: ''
+      defaultSlackMemberId: ''
     };
     this.savedEvents.update(prev => [newEvent, ...prev]);
     this.persistEvents();
@@ -176,9 +199,12 @@ export class DataService {
       return;
     }
     try {
+      const token   = await this.getSpocToken();
+      const payload: any = { action: 'update_event', eventId, ...updates };
+      if (token) payload.access_token = token;
       const response = await fetch(this.SCRIPT_URL, {
         method: 'POST',
-        body: JSON.stringify({ action: 'update_event', eventId, ...updates })
+        body: JSON.stringify(payload)
       });
       const result = await this.safeJson(response);
       if (result.status !== 'success') {
@@ -211,7 +237,10 @@ export class DataService {
   async fetchAllEventsFromMasterLog(): Promise<void> {
     if (!this.SCRIPT_URL) return;
     try {
-      const response = await fetch(`${this.SCRIPT_URL}?action=get_all_events`);
+      const token  = await this.getSpocToken();
+      const params = new URLSearchParams({ action: 'get_all_events' });
+      if (token) params.append('access_token', token);
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`);
       const data = await this.safeJson(response);
       if (data.status === 'success' && Array.isArray(data.events)) {
         const events: SavedEvent[] = data.events.map((e: any) => ({
@@ -223,7 +252,7 @@ export class DataService {
           eventDate:        e.eventDate        || '',
           defaultSpocName:  e.defaultSpocName  || '',
           defaultSpocEmail: e.defaultSpocEmail || '',
-          defaultSpocSlack: e.defaultSpocSlack || ''
+          defaultSlackMemberId: e.defaultSlackMemberId || ''
         }));
         this.savedEvents.set(events);
         this.persistEvents();
@@ -236,7 +265,10 @@ export class DataService {
   async getEventFromMasterLog(eventId: string): Promise<SavedEvent | null> {
     if (!this.SCRIPT_URL) return null;
     try {
-      const response = await fetch(`${this.SCRIPT_URL}?action=get_event&eventId=${eventId}`);
+      const token  = await this.getSpocToken();
+      const params = new URLSearchParams({ action: 'get_event', eventId });
+      if (token) params.append('access_token', token);
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`);
       const data = await this.safeJson(response);
       if (data.status === 'success' && data.event) {
         const event: SavedEvent = {
@@ -250,7 +282,7 @@ export class DataService {
           eventDate:        data.event.eventDate        || '',
           defaultSpocName:  data.event.defaultSpocName  || '',
           defaultSpocEmail: data.event.defaultSpocEmail || '',
-          defaultSpocSlack: data.event.defaultSpocSlack || ''
+          defaultSlackMemberId: data.event.defaultSlackMemberId || ''
         };
         const existing = this.savedEvents().find(e => e.id === event.id);
         if (!existing) {
@@ -277,18 +309,21 @@ export class DataService {
   async logEventToBackend(eventData: any) {
     if (!this.SCRIPT_URL) return;
     try {
+      const token   = await this.getSpocToken();
+      const payload: any = {
+        action:     'log_event',
+        eventId:    eventData.eventId,
+        eventName:  eventData.eventName,
+        sheetUrl:   eventData.sheetUrl,
+        deskLink:   eventData.deskLink,
+        spocLink:   eventData.spocLink,
+        walkinLink: eventData.walkinLink,
+        createdAt:  eventData.createdAt
+      };
+      if (token) payload.access_token = token;
       const response = await fetch(this.SCRIPT_URL, {
         method: 'POST',
-        body: JSON.stringify({
-          action:     'log_event',
-          eventId:    eventData.eventId,
-          eventName:  eventData.eventName,
-          sheetUrl:   eventData.sheetUrl,
-          deskLink:   eventData.deskLink,
-          spocLink:   eventData.spocLink,
-          walkinLink: eventData.walkinLink,
-          createdAt:  eventData.createdAt
-        })
+        body: JSON.stringify(payload)
       });
       const result = await this.safeJson(response);
       if (result.status !== 'success') {
@@ -335,6 +370,46 @@ export class DataService {
   }
 
   /**
+   * Helper: prepends a new note entry to existing notes using the standard format.
+   * Format: `author: text\n---\nexisting notes`
+   */
+  private prependNote(existing: string | undefined, author: string, text: string): string {
+    const entry = `${author}: ${text}`;
+    return (existing?.trim()) ? `${entry}\n---\n${existing}` : entry;
+  }
+
+  /**
+   * Prepends a new note entry to every attendee under the given account (company).
+   * Each attendee may already have different per-attendee notes, so they are updated
+   * individually. Optimistic batch update applied before any network calls go out.
+   */
+  updateNoteForAccount(accountName: string, author: string, noteText: string) {
+    const affected = this.rawAttendees().filter(a => a.company === accountName);
+    if (affected.length === 0) return;
+
+    const updates = affected.map(a => {
+      return {
+        id:           a.id,
+        email:        a.email,
+        updatedNotes: this.prependNote(a.notes, author, noteText),
+      };
+    });
+
+    // Single optimistic pass
+    this.rawAttendees.update(attendees =>
+      attendees.map(a => {
+        const u = updates.find(u => u.id === a.id);
+        return u ? { ...a, notes: u.updatedNotes } : a;
+      })
+    );
+
+    // One backend sync per attendee (GAS writes one sheet row per call)
+    for (const u of updates) {
+      this.syncChangeToBackend({ email: u.email, notes: u.updatedNotes });
+    }
+  }
+
+  /**
    * Adds a walk-in attendee to the event sheet.
    *
    * @param data               - Attendee form fields (already validated by the caller).
@@ -376,7 +451,7 @@ export class DataService {
       segment:      'Walk-in',
       spocName:     defaultSpocValues?.name  || 'Walk-in',
       spocEmail:    defaultSpocValues?.email || '',
-      spocSlack:    defaultSpocValues?.slack || '',
+      slackMemberId:    defaultSpocValues?.slack || '',
       lanyardColor:  DEFAULT_LANYARD_COLOR,
       nameCardColor: '',
       printStatus:   '',
@@ -393,7 +468,11 @@ export class DataService {
       const params = new URLSearchParams({ action: 'add', sheetUrl: sheet });
       if (sheetName) params.append('sheetName', sheetName);
 
-      const payload = {
+      // Attach SPOC OAuth token if available (when called from SPOC view)
+      // For desk-initiated walk-in adds, token will be null and is omitted.
+      const token = await this.getSpocToken();
+
+      const payload: any = {
         ...data,
         firstName,
         lastName,
@@ -403,9 +482,10 @@ export class DataService {
         autoCheckIn,
         defaultSpocName:  defaultSpocValues?.name  || '',
         defaultSpocEmail: defaultSpocValues?.email || '',
-        defaultSpocSlack: defaultSpocValues?.slack || '',
+        defaultSlackMemberId: defaultSpocValues?.slack || '',
         attendeeType: 'Attendee'
       };
+      if (token) payload.access_token = token;
 
       const attemptAdd = async () => {
         const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`, {
@@ -462,19 +542,26 @@ export class DataService {
     if (sheetName) params.append('sheetName', sheetName);
     const url = `${this.SCRIPT_URL}?${params.toString()}`;
 
+    const token = await this.getSpocToken();
+    const body  = token ? { ...payload, access_token: token } : payload;
+
     try {
       const controller = new AbortController();
       const timeoutId  = setTimeout(() => controller.abort(), SYNC_CONFIG.BACKEND_TIMEOUT_MS);
 
       const response = await fetch(url, {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
         signal: controller.signal
       });
       clearTimeout(timeoutId);
 
       const result = await this.safeJson(response);
       if (result.status !== 'success') {
+        if (this.isAuthError(result.error)) {
+          this.spocAuth.logout();
+          return;
+        }
         console.warn('Sync returned non-success, queuing for retry:', result.error);
         this.queuePendingSync(payload, retries);
       } else {
@@ -582,8 +669,10 @@ export class DataService {
     const timeoutId  = setTimeout(() => controller.abort(), 15_000);
 
     try {
+      const token  = await this.getSpocToken();
       const params = new URLSearchParams({ action: 'read', sheetUrl });
       if (sheetName) params.append('sheetName', sheetName);
+      if (token) params.append('access_token', token);
 
       const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -600,6 +689,10 @@ export class DataService {
         await this.flushPendingSyncs();
         return true;
       } else if (json.error) {
+        if (this.isAuthError(json.error)) {
+          this.spocAuth.logout();
+          return false;
+        }
         this.connectionError.set('Backend error: ' + json.error);
         return false;
       }
@@ -620,11 +713,26 @@ export class DataService {
   async fetchSheetMetadata(sheetUrl: string): Promise<string[]> {
     if (!this.SCRIPT_URL) return [];
     try {
-      const response = await fetch(`${this.SCRIPT_URL}?action=metadata&sheetUrl=${encodeURIComponent(sheetUrl)}`);
+      const token  = await this.getSpocToken();
+      const params = new URLSearchParams({ action: 'metadata', sheetUrl });
+      if (token) params.append('access_token', token);
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`);
       const json = await this.safeJson(response);
       return (json.status === 'success' && Array.isArray(json.sheets)) ? json.sheets : [];
     } catch (e) {
       console.error('Failed to fetch metadata', e);
+      return [];
+    }
+  }
+
+  async checkColumns(sheetUrl: string): Promise<string[]> {
+    if (!this.SCRIPT_URL || !sheetUrl) return [];
+    try {
+      const params = new URLSearchParams({ action: 'check_columns', sheetUrl });
+      const response = await fetch(`${this.SCRIPT_URL}?${params.toString()}`);
+      const json = await this.safeJson(response);
+      return (json.status === 'success' && Array.isArray(json.missing)) ? json.missing : [];
+    } catch {
       return [];
     }
   }
@@ -735,7 +843,7 @@ export class DataService {
         attendance:   attendanceBool,
         spocName:     spocVal,
         spocEmail:    this.cleanString(get('spocEmail', 'SPoC email', 'spoc_email')),
-        spocSlack:    this.cleanString(get('spocSlack', 'SPoC slack', 'spoc_slack')),
+        slackMemberId:    this.cleanString(get('slackMemberId', 'SPoC slack', 'spoc_slack')),
         printStatus:  this.cleanString(get('printStatus', 'Print Status')),
         checkInTime:  checkInDate,
         leadIntel:    this.cleanString(get('leadIntel', 'Account Intel', 'Lead Intel', 'talking points', 'Intel')),

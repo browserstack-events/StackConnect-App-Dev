@@ -108,6 +108,9 @@ Event Details: Lanyard Color, Segment (e.g., Industry), Attendance Status.
 
 Tracking: Check-in Time, Print Status.
 
+Re-Commit
+
+
 Intelligence: Lead Intel (talking points) and SPOC-specific Notes.
 
  

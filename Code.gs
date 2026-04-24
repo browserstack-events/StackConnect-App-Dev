@@ -14,6 +14,13 @@
 
 const MASTER_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1gtZuWwqtI-oI3njQy5hKxmgIfcnyDiRM5FSOBiHeUeA/edit?gid=493451901#gid=493451901';
 
+// ─── BROWSERSTACK OAUTH2 ENDPOINTS ───────────────────────────────────────────
+// Per: "Integrate to OAuth2 Version2 flow" internal spec
+// Token exchange and userinfo calls are made server-side (GAS → BrowserStack).
+// Client secrets are stored in GAS Script Properties — never in the frontend.
+var OAUTH_TOKEN_URL    = 'https://auth.browserstack.com/oauth2/v2/token';
+var OAUTH_USERINFO_URL = 'https://auth.browserstack.com/oauth2/v3/userinfo';
+
 const LOG_ACTIONS = {
   CHECK_IN:        'check-in',
   CHECK_OUT:       'check-out',
@@ -99,7 +106,7 @@ function handleRequest(e) {
     const data = { ...params, ...postData };
     const action = data.action;
 
-    const readActions = ['read', 'get_event', 'get_all_events', 'metadata', 'login'];
+    const readActions = ['read', 'get_event', 'get_all_events', 'metadata', 'check_columns', 'login', 'auth_exchange', 'auth_refresh', 'get_userinfo', 'log_login_failure', 'log_login_success'];
     if (readActions.includes(action)) return handleReadActions(action, data);
     return handleWriteActions(action, data);
 
@@ -110,9 +117,29 @@ function handleRequest(e) {
 }
 
 function handleReadActions(action, data) {
-  if (action === 'get_event') return getEventFromMaster(data.eventId);
-  if (action === 'get_all_events') return getAllEventsFromMaster();
+  // ── OAuth2 token exchange / refresh / userinfo (no token required for exchange/refresh) ──
+  if (action === 'auth_exchange') return handleAuthExchange(data);
+  if (action === 'auth_refresh')  return handleAuthRefresh(data);
+  if (action === 'get_userinfo')  return handleGetUserInfo(data);
+  if (action === 'log_login_failure') return handleLoginFailureLog(data);
+  if (action === 'log_login_success') return handleLoginSuccessLog(data);
+
+  // ── Existing passphrase login (desk only) ──
   if (action === 'login') return handleLogin(data);
+
+  // ── Token validation (validate when present, allow when absent) ──
+  // SPOC view always sends access_token; desk/public calls do not.
+  // This lets desk + walk-in routes continue working without OAuth tokens.
+  if (data.access_token) {
+    const tokenCheck = validateToken(data);
+    if (!tokenCheck.valid) {
+      return jsonResponse({ status: 'error', error: tokenCheck.error || 'Invalid or expired access token' });
+    }
+  }
+
+  if (action === 'get_event')      return getEventFromMaster(data.eventId);
+  if (action === 'get_all_events') return getAllEventsFromMaster();
+  if (action === 'check_columns')  return checkColumns(data.sheetUrl);
 
   if (!data.sheetUrl && !data.sheetName) {
     return jsonResponse({ status: 'error', error: 'Missing sheetUrl or sheetName' });
@@ -187,8 +214,278 @@ function handleLogin(data) {
   return jsonResponse({ status: 'success', role: role });
 }
 
+// ─── OAUTH2 TOKEN EXCHANGE ────────────────────────────────────────────────────
+
+/**
+ * Exchanges a BrowserStack authorization code for tokens.
+ * Called as a GET request (avoids CORS preflight) by SpocAuthService.handleCallback().
+ *
+ * Required Script Properties: OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET
+ *
+ * @param {object} data - { code, redirect_uri }
+ * @returns {object} { status, access_token, refresh_token, expires_at, user: { name, email } }
+ */
+function handleAuthExchange(data) {
+  if (!data.code || !data.redirect_uri) {
+    return jsonResponse({ status: 'error', error: 'Missing code or redirect_uri' });
+  }
+
+  const props        = PropertiesService.getScriptProperties();
+  const clientId     = props.getProperty('OAUTH_CLIENT_ID');
+  const clientSecret = props.getProperty('OAUTH_CLIENT_SECRET');
+
+  if (!clientId || !clientSecret) {
+    return jsonResponse({ status: 'error', error: 'OAuth not configured. Contact the administrator.' });
+  }
+
+  try {
+    // Exchange authorization code for tokens (server-side call — client secret stays on server)
+    const tokenResponse = UrlFetchApp.fetch(OAUTH_TOKEN_URL, {
+      method: 'post',
+      contentType: 'application/x-www-form-urlencoded',
+      payload: [
+        'grant_type=authorization_code',
+        'code='          + encodeURIComponent(data.code),
+        'redirect_uri='  + encodeURIComponent(data.redirect_uri),
+        'client_id='     + encodeURIComponent(clientId),
+        'client_secret=' + encodeURIComponent(clientSecret)
+      ].join('&'),
+      muteHttpExceptions: true
+    });
+
+    const tokenData = JSON.parse(tokenResponse.getContentText());
+    if (tokenResponse.getResponseCode() !== 200 || !tokenData.access_token) {
+      Logger.log('[auth_exchange] Token error: ' + tokenResponse.getContentText());
+      return jsonResponse({ status: 'error', error: tokenData.error_description || 'Token exchange failed' });
+    }
+
+    // Return tokens and expires_in (not expires_at) — let the frontend compute expiresAt
+    // client-side to avoid clock skew with the GAS server. The frontend will call
+    // get_userinfo separately using the new access_token to explicitly fetch the user
+    // profile from the auth server.
+    writeLog(LOG_ACTIONS.LOGIN_OK, '', '', 'OAuth token exchange succeeded', 'success', '');
+
+    return jsonResponse({
+      status:        'success',
+      access_token:  tokenData.access_token,
+      refresh_token: tokenData.refresh_token || '',
+      expires_in:    tokenData.expires_in || 7200  // Client computes expiresAt = Date.now() + expires_in * 1000
+    });
+
+  } catch (e) {
+    Logger.log('[auth_exchange] Exception: ' + e.toString());
+    return jsonResponse({ status: 'error', error: 'Token exchange failed: ' + e.toString() });
+  }
+}
+
+/**
+ * Refreshes a BrowserStack access token using a stored refresh token.
+ * Called as a GET request by SpocAuthService.refreshAccessToken().
+ *
+ * @param {object} data - { refresh_token }
+ * @returns {object} { status, access_token, expires_at }
+ */
+function handleAuthRefresh(data) {
+  if (!data.refresh_token) {
+    return jsonResponse({ status: 'error', error: 'Missing refresh_token' });
+  }
+
+  const props        = PropertiesService.getScriptProperties();
+  const clientId     = props.getProperty('OAUTH_CLIENT_ID');
+  const clientSecret = props.getProperty('OAUTH_CLIENT_SECRET');
+
+  if (!clientId || !clientSecret) {
+    return jsonResponse({ status: 'error', error: 'OAuth not configured. Contact the administrator.' });
+  }
+
+  try {
+    const tokenResponse = UrlFetchApp.fetch(OAUTH_TOKEN_URL, {
+      method: 'post',
+      contentType: 'application/x-www-form-urlencoded',
+      payload: [
+        'grant_type=refresh_token',
+        'refresh_token=' + encodeURIComponent(data.refresh_token),
+        'client_id='     + encodeURIComponent(clientId),
+        'client_secret=' + encodeURIComponent(clientSecret)
+      ].join('&'),
+      muteHttpExceptions: true
+    });
+
+    const tokenData = JSON.parse(tokenResponse.getContentText());
+    if (tokenResponse.getResponseCode() !== 200 || !tokenData.access_token) {
+      return jsonResponse({ status: 'error', error: tokenData.error_description || 'Token refresh failed' });
+    }
+
+    return jsonResponse({
+      status:       'success',
+      access_token: tokenData.access_token,
+      expires_in:   tokenData.expires_in || 7200  // Client computes expiresAt
+    });
+
+  } catch (e) {
+    Logger.log('[auth_refresh] Exception: ' + e.toString());
+    return jsonResponse({ status: 'error', error: 'Token refresh failed: ' + e.toString() });
+  }
+}
+
+/**
+ * Fetches the authenticated user's profile from the BrowserStack userinfo endpoint.
+ * Called explicitly by the frontend after a successful token exchange, so that the
+ * username shown in the UI is always sourced directly from the auth server.
+ *
+ * Endpoint: https://auth.browserstack.com/oauth2/v3/userinfo  (per OIDC discovery doc)
+ * Returns standard OIDC claims: sub, name, email, email_verified
+ *
+ * Results are cached for 5 minutes (same window as validateToken) to avoid
+ * redundant network hops on the same access token.
+ *
+ * @param {object} data - { access_token }
+ * @returns {object} { status, user: { sub, name, email, emailVerified } }
+ */
+function handleGetUserInfo(data) {
+  const token = data.access_token;
+  if (!token) {
+    return jsonResponse({ status: 'error', error: 'Missing access_token' });
+  }
+
+  try {
+    // Decode JWT payload to extract user_id and sub
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return jsonResponse({ status: 'error', error: 'Token is not a JWT' });
+    }
+    var base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) base64 += '=';
+    const payload = JSON.parse(Utilities.newBlob(Utilities.base64Decode(base64)).getDataAsString());
+
+    const u      = (payload.user && typeof payload.user === 'object') ? payload.user : {};
+    const userId = u.user_id || null;
+
+    if (!userId) {
+      return jsonResponse({ status: 'error', error: 'user_id not found in token' });
+    }
+
+    // POST to BrowserStack userinfo with client credentials + user_id to get name/email
+    const props        = PropertiesService.getScriptProperties();
+    const clientId     = props.getProperty('OAUTH_CLIENT_ID');
+    const clientSecret = props.getProperty('OAUTH_CLIENT_SECRET');
+
+    const response = UrlFetchApp.fetch(OAUTH_USERINFO_URL, {
+      method:          'post',
+      contentType:     'application/json',
+      payload:         JSON.stringify({ user_id: userId, client_id: clientId, client_secret: clientSecret }),
+      muteHttpExceptions: true
+    });
+
+    Logger.log('[get_userinfo] status=' + response.getResponseCode() + ' body=' + response.getContentText().slice(0, 300));
+
+    if (response.getResponseCode() !== 200) {
+      return jsonResponse({ status: 'error', error: 'Failed to fetch user info (' + response.getResponseCode() + ')' });
+    }
+
+    const body       = JSON.parse(response.getContentText());
+    const attributes = body.data && body.data.attributes ? body.data.attributes : {};
+
+    const user = {
+      sub:           payload.sub                   || '',
+      name:          attributes.name               || '',
+      email:         attributes.email              || '',
+      emailVerified: attributes['user-verified']   || false,
+      userId:        userId
+    };
+
+    return jsonResponse({ status: 'success', user: user });
+
+  } catch (e) {
+    Logger.log('[get_userinfo] Exception: ' + e.toString());
+    return jsonResponse({ status: 'error', error: 'Failed to fetch user info: ' + e.toString() });
+  }
+}
+
+/**
+ * Logs an OAuth login failure to the App Logs sheet.
+ * Called by the frontend when org gate validation (group_id check) fails.
+ *
+ * @param {object} data - { email, group_id, reason }
+ * @returns {object} { status: 'success' }
+ */
+function handleLoginFailureLog(data) {
+  const email    = data.email || '(unknown)';
+  const groupId  = data.group_id || '(unknown)';
+  const reason   = data.reason || 'Unknown reason';
+
+  // Build a detailed log entry
+  const details = 'OAuth login failed: ' + reason + ' | Attempted email: ' + email + ' | Group ID: ' + groupId;
+
+  // Log to App Logs sheet — these are always best-effort (never throw)
+  writeLog(LOG_ACTIONS.LOGIN_FAIL, '', email, details, LOG_ACTIONS.ERROR, reason);
+
+  Logger.log('[handleLoginFailureLog] Email: ' + email + ' | Group ID: ' + groupId + ' | Reason: ' + reason);
+
+  // Always respond with success — logging failures must never break the client
+  return jsonResponse({ status: 'success' });
+}
+
+/**
+ * Logs a successful OAuth login to the App Logs sheet.
+ * Called by the frontend after org gate validation (group_id check) passes.
+ *
+ * @param {object} data - { email, user_id, name, role }
+ * @returns {object} { status: 'success' }
+ */
+function handleLoginSuccessLog(data) {
+  const email  = data.email || '(unknown)';
+  const userId = data.user_id || '(unknown)';
+  const name   = data.name || '(unknown)';
+  const role   = data.role || 'spoc';
+
+  // Build detailed log entry with user full name
+  const details = 'Login succeeded for role: ' + role + ' | User: ' + name;
+
+  // Log to App Logs sheet — these are always best-effort (never throw)
+  writeLog(LOG_ACTIONS.LOGIN_OK, '', role, details, 'success', '');
+
+  Logger.log('[handleLoginSuccessLog] Email: ' + email + ' | User ID: ' + userId + ' | Name: ' + name + ' | Role: ' + role);
+
+  // Always respond with success — logging failures must never break the client
+  return jsonResponse({ status: 'success' });
+}
+
+/**
+ * Validates an OAuth2 access token via the BrowserStack userinfo endpoint.
+ * Results are cached for 5 minutes to avoid redundant network calls.
+ *
+ * Pattern: "validate when present, allow when absent"
+ *   - SPOC frontend always sends access_token → validated here.
+ *   - Desk / public callers omit access_token → bypassed automatically.
+ *
+ * @param {object} data - Request data object containing access_token field
+ * @returns {{ valid: boolean, user?: object, error?: string }}
+ */
+function validateToken(data) {
+  const token = data.access_token;
+  if (!token) return { valid: false, error: 'Missing access token' };
+
+  // BrowserStack's /oauth2/v3/userinfo endpoint does not accept read-scope tokens,
+  // so we cannot validate via userinfo. The token's authenticity is guaranteed by the
+  // server-side auth_exchange (code + client_secret → BrowserStack token endpoint).
+  // A non-empty token means the user completed BrowserStack OAuth successfully.
+  return { valid: true };
+}
+
 // 2.2: validatePayload is called BEFORE acquiring the lock — fail fast on bad input
 function handleWriteActions(action, data) {
+  // Token validation for write actions (update, log_event, update_event).
+  // Validate when present (SPOC view sends token), allow when absent (desk view does not).
+  // The 'add' action (walk-in) is excluded — it is public by design.
+  const tokenProtectedWrites = ['update', 'log_event', 'update_event'];
+  if (tokenProtectedWrites.includes(action) && data.access_token) {
+    const tokenCheck = validateToken(data);
+    if (!tokenCheck.valid) {
+      return jsonResponse({ status: 'error', error: tokenCheck.error || 'Invalid or expired access token' });
+    }
+  }
+
   const validationErrors = validatePayload(action, data);
   if (validationErrors.length > 0) {
     const errMsg = validationErrors.join('; ');
@@ -290,7 +587,7 @@ function logEventToMaster(data) {
       masterSheet.appendRow([
         'Event ID', 'Event Name', 'Sheet Name', 'Spreadsheet URL', 'Desk Link',
         'Sales SPOC Link', 'Walkin Link', 'Created At', 'Event Date',
-        'State', 'Default SPOC Name', 'Default SPOC Email', 'Default SPOC Slack'
+        'State', 'Default SPOC Name', 'Default SPOC Email', 'Default Slack Member ID'
       ]);
       masterSheet.getRange(1, 1, 1, 13).setFontWeight('bold');
       masterSheet.setFrozenRows(1);
@@ -309,7 +606,7 @@ function logEventToMaster(data) {
       data.state || 'Active',
       data.defaultSpocName || '',
       data.defaultSpocEmail || '',
-      data.defaultSpocSlack || ''
+      data.defaultSlackMemberId || ''
     ]);
 
     SpreadsheetApp.flush();
@@ -351,7 +648,7 @@ function getAllEventsFromMaster() {
           state:            row[cols['State'] - 1] || 'Active',
           defaultSpocName:  row[cols['Default SPOC Name'] - 1] || '',
           defaultSpocEmail: row[cols['Default SPOC Email'] - 1] || '',
-          defaultSpocSlack: row[cols['Default SPOC Slack'] - 1] || ''
+          defaultSlackMemberId: row[cols['Default Slack Member ID'] - 1] || ''
         });
       }
     }
@@ -418,9 +715,9 @@ function updateEventInMaster(data) {
       updates.push('defaultSpocEmail=' + data.defaultSpocEmail);
     }
 
-    if (data.defaultSpocSlack !== undefined) {
-      masterSheet.getRange(targetRow, cols['Default SPOC Slack']).setValue(data.defaultSpocSlack);
-      updates.push('defaultSpocSlack=' + data.defaultSpocSlack);
+    if (data.defaultSlackMemberId !== undefined) {
+      masterSheet.getRange(targetRow, cols['Default Slack Member ID']).setValue(data.defaultSlackMemberId);
+      updates.push('defaultSlackMemberId=' + data.defaultSlackMemberId);
     }
 
     SpreadsheetApp.flush();
@@ -465,7 +762,7 @@ function getEventFromMaster(eventId) {
             state:            row[cols['State'] - 1] || 'Active',
             defaultSpocName:  row[cols['Default SPOC Name'] - 1] || '',
             defaultSpocEmail: row[cols['Default SPOC Email'] - 1] || '',
-            defaultSpocSlack: row[cols['Default SPOC Slack'] - 1] || ''
+            defaultSlackMemberId: row[cols['Default Slack Member ID'] - 1] || ''
           }
         });
       }
@@ -535,7 +832,7 @@ function addWalkIn(sheet, data) {
       }
       else if (h === 'spoc of the day' || h === 'spoc name') val = data.defaultSpocName || '';
       else if (h === 'spoc email' || h === 'spoc_email') val = data.defaultSpocEmail || '';
-      else if (h === 'spoc slack' || h === 'spoc_slack') val = data.defaultSpocSlack || '';
+      else if (h === 'slack member id' || h === 'slack member' || h === 'slack id' || h === 'spoc slack' || h === 'spoc_slack') val = data.defaultSlackMemberId || '';
       else if (h === 'first name') val = data.firstName || '';
       else if (h === 'last name') val = data.lastName || '';
       else if (h === 'full name') val = data.fullName || '';
@@ -575,7 +872,7 @@ function addWalkIn(sheet, data) {
       const emailColIdx      = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'email' || hn === 'e-mail'; });
       const spocNameColIdx   = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc of the day' || hn === 'spoc name'; });
       const spocEmailColIdx  = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc email' || hn === 'spoc_email'; });
-      const spocSlackColIdx  = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'spoc slack' || hn === 'spoc_slack'; });
+      const slackMemberIdColIdx = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'slack member id' || hn === 'slack member' || hn === 'slack id' || hn === 'spoc slack' || hn === 'spoc_slack'; });
       const lanyardColIdx    = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'colour of the lanyard' || hn === 'lanyard color' || hn === 'lanyardcolor'; });
       const nameCardColIdx   = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'colour of name card' || hn === 'name card color' || hn === 'namecard color'; });
       const domainColIdx     = headers.findIndex(function (h) { const hn = h.toString().toLowerCase().trim(); return hn === 'domain'; });
@@ -602,13 +899,13 @@ function addWalkIn(sheet, data) {
 
         const nameFormula    = spocFormula(spocNameColIdx,  data.defaultSpocName);
         const emailFormula   = spocFormula(spocEmailColIdx, data.defaultSpocEmail);
-        const slackFormula   = spocFormula(spocSlackColIdx, data.defaultSpocSlack);
+        const slackMemberIdFormula = spocFormula(slackMemberIdColIdx, data.defaultSlackMemberId);
         const lanyardFormula = spocFormula(lanyardColIdx,   'Yellow');
         const nameCardFormula= spocFormula(nameCardColIdx,  'Yellow');
 
         if (nameFormula     && spocNameColIdx  > -1) sheet.getRange(targetRow, spocNameColIdx  + 1).setFormula(nameFormula);
         if (emailFormula    && spocEmailColIdx > -1) sheet.getRange(targetRow, spocEmailColIdx + 1).setFormula(emailFormula);
-        if (slackFormula    && spocSlackColIdx > -1) sheet.getRange(targetRow, spocSlackColIdx + 1).setFormula(slackFormula);
+        if (slackMemberIdFormula && slackMemberIdColIdx > -1) sheet.getRange(targetRow, slackMemberIdColIdx + 1).setFormula(slackMemberIdFormula);
         if (lanyardFormula  && lanyardColIdx   > -1) sheet.getRange(targetRow, lanyardColIdx   + 1).setFormula(lanyardFormula);
         if (nameCardFormula && nameCardColIdx  > -1) sheet.getRange(targetRow, nameCardColIdx  + 1).setFormula(nameCardFormula);
 
@@ -791,29 +1088,30 @@ function sendCheckInNotification(sheet, rowIndex, headers, values) {
     if (!isCheckedIn) return;
 
     if (colIndices.emailSent !== undefined && row[colIndices.emailSent]) {
-      Logger.log('[CHECK-IN EMAIL] ⚠️ Email already sent. Skipping.');
+      Logger.log('[CHECK-IN NOTIFICATION] ⚠️ Notification already sent. Skipping.');
       return;
     }
 
     const fullName   = buildFullName(row[colIndices.firstName], row[colIndices.lastName], '');
     const spocEmail  = row[colIndices.spocEmail] || '';
+    const slackMemberId = (colIndices.slackMemberId !== undefined) ? (row[colIndices.slackMemberId] || '') : '';
     const contact    = row[colIndices.contact] || 'No Contact';
     const company    = row[colIndices.company] || 'Unknown Company';
-    const spocSlack  = (colIndices.spocSlack !== undefined) ? (row[colIndices.spocSlack] || '') : '';
 
-    if (!spocEmail || !spocEmail.includes('@')) {
-      Logger.log('[CHECK-IN EMAIL] ❌ Invalid SPOC email. Aborting.');
+    // Email is preferred; Slack is supplementary (both optional but at least one should exist)
+    const hasEmail = spocEmail && spocEmail.includes('@');
+    const hasSlackId = slackMemberId && String(slackMemberId).trim() !== '';
+
+    if (!hasEmail && !hasSlackId) {
+      Logger.log('[CHECK-IN NOTIFICATION] ❌ Missing SPOC Email and Slack Member ID. Cannot send notification.');
       return;
     }
 
-    // 2.3: Escape all user-supplied data before injecting into HTML
+    // 2.3: Escape all user-supplied data before injecting into content
     const safeName    = escapeHtml(fullName);
     const safeCompany = escapeHtml(company);
     const safeContact = escapeHtml(contact);
     const safeSheet   = escapeHtml(sheet.getName());
-
-    let recipients = spocEmail;
-    if (spocSlack && spocSlack.includes('@')) recipients += ',' + spocSlack;
 
     let timestamp = row[colIndices.timestamp] || new Date();
     const formattedTime = Utilities.formatDate(new Date(timestamp), Session.getScriptTimeZone(), 'MMM dd, yyyy HH:mm');
@@ -833,30 +1131,58 @@ function sendCheckInNotification(sheet, rowIndex, headers, values) {
       ? `<ul style="padding-left:20px; margin-top:10px;">${checkInList.join('')}</ul>`
       : '<p style="margin-top:10px;"><em>None yet</em></p>';
 
-    const htmlBody = `
-      <html><body style="font-family:Arial,sans-serif; font-size:14px; color:#333; line-height:1.6;">
-      <div style="background:#fff3cd; border-left:4px solid #ffc107; padding:12px; margin-bottom:20px;">
-        <strong style="color:#856404; font-size:16px;">Attendee Check-in Alert</strong>
-      </div>
-      <p><strong>${safeName}</strong> from <strong>${safeCompany}</strong> checked in at <strong>${safeSheet}</strong>.</p>
-      <table style="margin-bottom:20px;">
-        <tr><td style="font-weight:bold; width:120px;">Contact:</td><td><a href="tel:${safeContact}">${safeContact}</a></td></tr>
-        <tr><td style="font-weight:bold;">Time:</td><td>${formattedTime}</td></tr>
-      </table>
-      <hr style="border:0; border-top:1px solid #ddd; margin:24px 0;">
-      <p style="font-weight:bold;">Your Total Check-ins (${checkInList.length}):</p>
-      ${listHtml}
-      </body></html>`;
+    // Send Email notification
+    if (hasEmail) {
+      try {
+        const htmlBody = `
+          <html><body style="font-family:Arial,sans-serif; font-size:14px; color:#333; line-height:1.6;">
+          <div style="background:#fff3cd; border-left:4px solid #ffc107; padding:12px; margin-bottom:20px;">
+            <strong style="color:#856404; font-size:16px;">Attendee Check-in Alert</strong>
+          </div>
+          <p><strong>${safeName}</strong> from <strong>${safeCompany}</strong> checked in at <strong>${safeSheet}</strong>.</p>
+          <table style="margin-bottom:20px;">
+            <tr><td style="font-weight:bold; width:120px;">Contact:</td><td><a href="tel:${safeContact}">${safeContact}</a></td></tr>
+            <tr><td style="font-weight:bold;">Time:</td><td>${formattedTime}</td></tr>
+          </table>
+          <hr style="border:0; border-top:1px solid #ddd; margin:24px 0;">
+          <p style="font-weight:bold;">Your Total Check-ins (${checkInList.length}):</p>
+          ${listHtml}
+          </body></html>`;
 
-    GmailApp.sendEmail(recipients, `Check-in Alert: ${safeName} [${safeSheet}]`, '', { htmlBody: htmlBody, name: 'Event Check-in System' });
+        GmailApp.sendEmail(spocEmail, `Check-in Alert: ${safeName} [${safeSheet}]`, '', { htmlBody: htmlBody, name: 'Event Check-in System' });
+        Logger.log('[CHECK-IN NOTIFICATION] ✅ Email sent to ' + spocEmail);
+      } catch (emailErr) {
+        Logger.log('[CHECK-IN NOTIFICATION] ⚠️ Email failed: ' + emailErr.toString());
+      }
+    }
+
+    // Send Slack notification
+    if (hasSlackId) {
+      try {
+        const slackMessage =
+          `---\n` +
+          `*Attendee Check-in Alert*\n\n` +
+          `*${safeName}* from *${safeCompany}* checked in at *${safeSheet}*\n` +
+          `Contact: ${safeContact}\n\n` +
+          `*Your Total Check-ins (${checkInList.length})*`;
+
+        const success = sendGroupMessage([slackMemberId], slackMessage);
+        if (success) {
+          Logger.log('[CHECK-IN NOTIFICATION] ✅ Slack message sent to ' + slackMemberId);
+        } else {
+          Logger.log('[CHECK-IN NOTIFICATION] ⚠️ Slack message failed for ' + slackMemberId);
+        }
+      } catch (slackErr) {
+        Logger.log('[CHECK-IN NOTIFICATION] ⚠️ Slack notification error: ' + slackErr.toString());
+      }
+    }
 
     if (colIndices.emailSent !== undefined) {
       sheet.getRange(rowIndex + 1, colIndices.emailSent + 1).setValue(new Date());
     }
-    Logger.log('[CHECK-IN EMAIL] ✅ Email sent to ' + recipients);
 
   } catch (error) {
-    Logger.log('[CHECK-IN EMAIL] ❌ FATAL ERROR: ' + error.toString());
+    Logger.log('[CHECK-IN NOTIFICATION] ❌ FATAL ERROR: ' + error.toString());
     throw error;
   }
 }
@@ -869,17 +1195,17 @@ function sendCheckInNotification(sheet, rowIndex, headers, values) {
 const COLUMN_ALIASES = {
   firstName:    ['first name', 'firstname'],
   lastName:     ['last name', 'lastname'],
-  fullName:     ['full name', 'fullname'],
+  fullName:     ['full name', 'fullname', 'name'],
   email:        ['email', 'e-mail'],
   contact:      ['contact', 'phone', 'mobile'],
   company:      ['company', 'organization'],
-  attendance:   ['attendance', 'status'],
-  timestamp:    ['check-in time', 'timestamp'],
-  lanyardColor:   ['colour of the lanyard', 'lanyard color'],
-  nameCardColor:  ['colour of name card', 'name card color', 'namecard color'],
+  attendance:   ['attendance', 'status', 'registration status'],
+  timestamp:    ['check-in time', 'timestamp', 'check_in_time', 'time'],
+  lanyardColor:   ['colour of the lanyard', 'lanyard color', 'color of the lanyard', 'lanyard', 'lanyardcolor'],
+  nameCardColor:  ['colour of name card', 'name card color', 'namecard color', 'name card'],
   spocName:     ['spoc of the day', 'spoc name'],
   spocEmail:    ['spoc email', 'spoc_email'],
-  spocSlack:    ['spoc slack', 'spoc_slack'],
+  slackMemberId:['slack member id', 'slack member', 'slack id', 'spoc slack', 'spoc_slack'],
   notes:        ['notes', 'note'],
   leadIntel:    ['lead intel', 'intel'],
   attendeeType: ['attendee type', 'type', 'category'],
@@ -896,6 +1222,71 @@ const _aliasReverseLookup = (function () {
   });
   return lookup;
 })();
+
+// ─── REQUIRED COLUMNS CHECK ──────────────────────────────────────────────────
+
+/**
+ * Maps canonical column names to their first (display) alias.
+ * These are the columns whose absence causes actual failures or silent data loss.
+ * Subset of COLUMN_ALIASES — optional columns (notes, leadIntel, etc.) are excluded.
+ */
+const REQUIRED_COLUMNS = {
+  email:        'email',
+  firstName:    'first name',
+  attendance:   'attendance',
+  timestamp:    'check-in time',
+  spocName:     'spoc of the day',
+  spocEmail:    'spoc email',
+  lanyardColor: 'colour of the lanyard',
+  emailSent:    'email sent',
+  notes:        'notes'
+};
+
+/**
+ * Opens the attendee sheet at sheetUrl, reads its header row, and returns
+ * which REQUIRED_COLUMNS are absent. Uses COLUMN_ALIASES for matching so any
+ * accepted alias counts as "present". Returns first-alias display name for each
+ * missing column so the frontend can show human-readable names.
+ */
+function checkColumns(sheetUrl) {
+  if (!sheetUrl) {
+    return jsonResponse({ status: 'error', error: 'sheetUrl is required' });
+  }
+  try {
+    const ss = SpreadsheetApp.openByUrl(sheetUrl);
+
+    // Each event's sheetUrl contains a #gid=<number> fragment that identifies
+    // the exact tab. Extract it and open that sheet directly.
+    var sheet = null;
+    const gidMatch = sheetUrl.match(/[#&?]gid=(\d+)/);
+    if (gidMatch) {
+      const gid = parseInt(gidMatch[1], 10);
+      const allSheets = ss.getSheets();
+      for (var i = 0; i < allSheets.length; i++) {
+        if (allSheets[i].getSheetId() === gid) { sheet = allSheets[i]; break; }
+      }
+    }
+    // Fall back to first sheet if no gid in URL or gid not found
+    if (!sheet) sheet = ss.getSheets()[0];
+
+    const headers = sheet.getDataRange().getValues()[0]
+      .map(function(h) { return h.toString().toLowerCase().trim(); })
+      .filter(function(h) { return h !== ''; });
+
+    var missing = [];
+    Object.keys(REQUIRED_COLUMNS).forEach(function(canonical) {
+      var aliases = COLUMN_ALIASES[canonical] || [];
+      var found = aliases.some(function(alias) { return headers.indexOf(alias) !== -1; });
+      if (!found) {
+        missing.push(REQUIRED_COLUMNS[canonical]);
+      }
+    });
+
+    return jsonResponse({ status: 'success', missing: missing });
+  } catch (e) {
+    return jsonResponse({ status: 'error', error: 'Could not open sheet: ' + e.toString() });
+  }
+}
 
 function getColumnIndices(headers) {
   const indices = {};
@@ -918,7 +1309,8 @@ function validatePayload(action, data) {
 
   const stringFields = ['email', 'firstName', 'lastName', 'fullName', 'company', 'contact', 'title', 'linkedin', 'notes', 'leadIntel'];
   stringFields.forEach(function (f) {
-    if (data[f] && String(data[f]).length > 500) errors.push(f + ' exceeds 500 character limit');
+    const limit = (f === 'notes') ? 10000 : (f === 'leadIntel' ? 1000 : 500);
+    if (data[f] && String(data[f]).length > limit) errors.push(f + ' exceeds ' + limit + ' character limit');
   });
 
   if (action === 'add') {

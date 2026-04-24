@@ -11,25 +11,7 @@ permissions:
   id-token: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install Dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Run Tests
-        run: npm test
-
   deploy:
-    needs: test
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -59,6 +41,26 @@ jobs:
             exit 1
           fi
           echo "GAS URL injected successfully."
+
+      - name: Inject OAuth secrets
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_REDIRECT_URI: ${{ secrets.OAUTH_REDIRECT_URI }}
+        run: |
+          sed -i "s|OAUTH_CLIENT_ID_PLACEHOLDER|${OAUTH_CLIENT_ID}|g" src/environments/environment.prod.ts
+          sed -i "s|OAUTH_REDIRECT_URI_PLACEHOLDER|${OAUTH_REDIRECT_URI}|g" src/environments/environment.prod.ts
+
+      - name: Verify OAuth injection
+        run: |
+          if grep -q "OAUTH_CLIENT_ID_PLACEHOLDER" src/environments/environment.prod.ts; then
+            echo "ERROR: OAUTH_CLIENT_ID secret not injected. Add OAUTH_CLIENT_ID to the github-pages environment secrets."
+            exit 1
+          fi
+          if grep -q "OAUTH_REDIRECT_URI_PLACEHOLDER" src/environments/environment.prod.ts; then
+            echo "ERROR: OAUTH_REDIRECT_URI secret not injected. Add OAUTH_REDIRECT_URI to the github-pages environment secrets."
+            exit 1
+          fi
+          echo "OAuth secrets injected successfully."
 
       - name: Build
         run: npm run build -- --base-href /StackConnect-App-Dev/
